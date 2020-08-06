@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Sun Jul 26 23:43:52 2020
+Created on Tue Aug 5 10:39:42 2020
 
 @author: arpan
 
-@Description: Train an Attention model on strokes
+@Description: Training GRU model on sequence classification.
 """
 
 import os
@@ -32,8 +32,8 @@ from torch.utils.data import DataLoader
 #from utils.resnet_feature_extracter import Clip2Vec
 from utils import autoenc_utils
 #import datasets.videotransforms as videotransforms
-#from datasets.dataset import StrokeFeatureSequenceDataset
-from datasets.dataset import StrokeFeaturePairsDataset
+from datasets.dataset import StrokeFeatureSequenceDataset
+#from datasets.dataset import StrokeFeaturePairsDataset
 import copy
 import time
 import csv
@@ -45,8 +45,10 @@ base_path = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/l
 ft_dir = "bow_HL_ofAng_grid20"
 feat, feat_val = "of_feats_grid20.pkl", "of_feats_val_grid20.pkl"
 snames, snames_val = "of_snames_grid20.pkl", "of_snames_val_grid20.pkl"
-INPUT_SIZE, TARGET_SIZE = 576, 576      # OFGRID: 576, 3DCNN: 512, 2DCNN: 2048
-HIDDEN_SIZE = 256 #64#1024
+INPUT_SIZE = 576      # OFGRID: 576, 3DCNN: 512, 2DCNN: 2048
+HIDDEN_SIZE = 512
+N_LAYERS = 1
+bidirectional = False
 
 
 def get_cluster_labels(cluster_labels_path):
@@ -85,32 +87,24 @@ def get_batch_labels(vid_path, stroke, labs_keys, labs_values):
         
 def save_model_checkpoint(base_name, model, ep, opt):
     """
-    TODO: save the optimizer state with epoch no. along with the weights
+    Save the optimizer state with epoch no. along with the weights
     """
     # Save only the model params
-    enc_name = os.path.join(base_name, "enc_attn_ep"+str(ep)+"_"+opt+".pt")
-    dec_name = os.path.join(base_name, "dec_attn_ep"+str(ep)+"_"+opt+".pt")
-#    if use_gpu and torch.cuda.device_count() > 1:
-#        model = model.module    # good idea to unwrap from DataParallel and save
+    model_name = os.path.join(base_name, "gru_classifier_ep"+str(ep)+"_"+opt+".pt")
 
-    torch.save(model[0].state_dict(), enc_name)
-    torch.save(model[1].state_dict(), dec_name)
-    print("Model saved to disk... \n Enc : {} \n Dec : {}".format(enc_name, dec_name))
-    
-def load_model_checkpoint(base_name, encoder, decoder, ep, opt):
+    torch.save(model.state_dict(), model_name)
+    print("Model saved to disk... : {}".format(model_name))
+
+def load_weights(base_name, model, ep, opt):
     """
-    Load the pretrained weights from disk
+    Load the pretrained weights to the models' encoder and decoder modules
     """
     # Paths to encoder and decoder files
-    enc_name = os.path.join(base_name, "enc_attn_ep"+str(ep)+"_"+opt+".pt")
-    dec_name = os.path.join(base_name, "dec_attn_ep"+str(ep)+"_"+opt+".pt")
-    if os.path.isfile(enc_name):
-        encoder.load_state_dict(torch.load(enc_name))
-        print("Loading Encoder weights... : {}".format(enc_name))
-    if os.path.isfile(dec_name):
-        decoder.load_state_dict(torch.load(dec_name))
-        print("Loading Decoder weights... : {}".format(dec_name))
-    return encoder, decoder
+    model_name = os.path.join(base_name, "gru_classifier_ep"+str(ep)+"_"+opt+".pt")
+    if os.path.isfile(model_name):
+        model.load_state_dict(torch.load(model_name))
+        print("Loading Encoder weights... : {}".format(model_name))
+    return model
     
 def read_feats(base_name, feat, snames):
     with open(os.path.join(base_name, feat), "rb") as fp:
@@ -119,13 +113,15 @@ def read_feats(base_name, feat, snames):
         strokes_name_id = pickle.load(fp)
     return features, strokes_name_id
 
+# function to count the number of parameters in the model
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-def train_model(features, stroke_names_id, encoder, decoder, dataloaders, criterion, 
-                encoder_optimizer, decoder_optimizer, scheduler, labs_keys, 
-                labs_values, num_epochs=25):
+def train_model(features, stroke_names_id, model, dataloaders, criterion, 
+                optimizer, scheduler, labs_keys, labs_values, num_epochs=25):
     since = time.time()
 
-#    best_model_wts = copy.deepcopy(model.state_dict())
+    best_model_wts = copy.deepcopy(model.state_dict())
     best_acc = 0.0
 
     for epoch in range(num_epochs):
@@ -133,76 +129,71 @@ def train_model(features, stroke_names_id, encoder, decoder, dataloaders, criter
         print('-' * 10)
 
         # Each epoch has a training and validation phase
-        for phase in ['train']:
-#            if phase == 'train':
-#                model.train()  # Set model to training mode
-#            else:
-#                model.eval()   # Set model to evaluate mode
+        for phase in ['train', 'test']:
+            if phase == 'train':
+                model.train()  # Set model to training mode
+            else:
+                model.eval()   # Set model to evaluate mode
 
             running_loss = 0.0
             running_corrects = 0
 
             # Iterate over data.
-            for bno, (inputs, targets, vid_path, stroke, labels) in enumerate(dataloaders[phase]):
+            for bno, (inputs, vid_path, stroke, labels) in enumerate(dataloaders[phase]):
                 # inputs of shape BATCH x SEQ_LEN x FEATURE_DIM
                 labels = get_batch_labels(vid_path, stroke, labs_keys, labs_values)
                 # Extract spatio-temporal features from clip using 3D ResNet (For SL >= 16)
-#                inputs = inputs.permute(0, 2, 1, 3, 4).float()
-                
-                inputs, targets = inputs.to(device), targets.to(device)
+#                inputs = inputs.permute(0, 2, 1, 3, 4).float()                
+                inputs = inputs.to(device)
                 labels = labels.to(device)
 
                 # zero the parameter gradients
-                encoder_optimizer.zero_grad()
-                decoder_optimizer.zero_grad()
-                loss = 0
+                optimizer.zero_grad()
 
                 # forward
                 # track history if only in train
                 with torch.set_grad_enabled(phase == 'train'):
                     
-                    batch_size = inputs.size(0)
-                    enc_h = encoder.init_hidden(batch_size)
-                    enc_out, h = encoder(inputs, enc_h)
-                    dec_h = h
-                    dec_out_lst = []
-                    target_length = targets.size(1)      # assign SEQ_LEN as target length for now
-                    # run for each word of the sequence (use teacher forcing)
-                    for ti in range(target_length):
-                        dec_out, dec_h, dec_attn = decoder(dec_h, enc_out, targets[:,ti,:])
-                        dec_out_lst.append(dec_out)
-                        loss += criterion(dec_out, targets[:,ti,:])
-                        #decoder_input = target_tensor[di]  # Teacher forcing
-            
-                    outputs = torch.stack(dec_out_lst, dim=1)
+#                    batch_size = inputs.size(0)
+#                    loss = criterion(outputs, labels)
+#                    dec_h = h
+#                    dec_out_lst = []
+#                    target_length = targets.size(1)      # assign SEQ_LEN as target length for now
+#                    # run for each word of the sequence (use teacher forcing)
+#                    for ti in range(target_length):
+#                        dec_out, dec_h, dec_attn = decoder(dec_h, enc_out, targets[:,ti,:])
+#                        dec_out_lst.append(dec_out)
+#                        
+#                        #decoder_input = target_tensor[di]  # Teacher forcing
+#            
+#                    outputs = torch.stack(dec_out_lst, dim=1)
+                    hidden = model.init_hidden(inputs.size(0))
                     
-#                    outputs, dec_h, wts = model(inputs, inputs)
-#                    _, preds = torch.max(outputs, 1)
-#                    loss = criterion(outputs, targets)     #torch.flip(targets, [1])
+                    outputs, hidden = model(inputs, hidden)
+                    _, preds = torch.max(outputs, 1)
+                    loss = criterion(outputs, labels)     #torch.flip(targets, [1])
 
                     # backward + optimize only if in training phase
                     if phase == 'train':
                         loss.backward()
-                        encoder_optimizer.step()
-                        decoder_optimizer.step()
+                        optimizer.step()
 
                 # statistics
-                running_loss += loss.item()
+                running_loss += loss.item() * inputs.size(0)
 #                print("Iter : {} :: Running Loss : {}".format(bno, running_loss))
-#                running_corrects += torch.sum(preds == labels.data)
+                running_corrects += torch.sum(preds == labels.data)
                 
 #                print("Batch No : {} / {}".format(bno, len(dataloaders[phase])))
 #                if (bno+1) % 10 == 0:
 #                    break
                     
-#            if phase == 'train':
-#                scheduler.step()
+            if phase == 'train':
+                scheduler.step()
 
-            epoch_loss = running_loss #/ len(dataloaders[phase].dataset)
-#            epoch_acc = running_corrects.double() / len(dataloaders[phase].dataset)
+            epoch_loss = running_loss / len(dataloaders[phase].dataset)
+            epoch_acc = running_corrects.double() / len(dataloaders[phase].dataset)
 
-            print('{} Loss: {:.4f}'.format(
-                phase, epoch_loss))
+            print('{} Loss: {:.4f} Acc: {:.4f}'.format(phase, epoch_loss, epoch_acc))
 
 #            # deep copy the model
 #            if phase == 'test' and epoch_acc > best_acc:
@@ -210,7 +201,7 @@ def train_model(features, stroke_names_id, encoder, decoder, dataloaders, criter
 #                best_model_wts = copy.deepcopy(model.state_dict())
 
         print()
-
+        
     time_elapsed = time.time() - since
     print('Training complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, \
           time_elapsed % 60))
@@ -218,65 +209,63 @@ def train_model(features, stroke_names_id, encoder, decoder, dataloaders, criter
 
 #    # load best model weights
 #    model.load_state_dict(best_model_wts)
-    return encoder, decoder
+    return model
 
-def predict(features, stroke_names_id, encoder, decoder, dataloaders, labs_keys, 
-            labs_values, phase="val"):
+def predict(features, stroke_names_id, model, dataloaders, labs_keys, labs_values, 
+            phase="val"):
     assert phase == "val" or phase=="test", "Incorrect Phase."
-    encoder = encoder.eval()
-    decoder = decoder.eval()
+    model = model.eval()
+    gt_list, pred_list, stroke_ids  = [], [], []
     # Iterate over data.
-    for bno, (inputs, targets, vid_path, stroke, labels) in enumerate(dataloaders[phase]):
+    for bno, (inputs, vid_path, stroke, labels) in enumerate(dataloaders[phase]):
         # inputs of shape BATCH x SEQ_LEN x FEATURE_DIM
         labels = get_batch_labels(vid_path, stroke, labs_keys, labs_values)
-        # Extract spatio-temporal features from clip using 3D ResNet (For SL >= 16)
-#                inputs = inputs.permute(0, 2, 1, 3, 4).float()
         
-        inputs, targets = inputs.to(device), targets.to(device)
+        inputs = inputs.to(device)
         labels = labels.to(device)
-
-        loss = 0
-
         # forward
-        # track history if only in train
         with torch.set_grad_enabled(phase == 'train'):
             
             batch_size = inputs.size(0)
-            enc_h = encoder.init_hidden(batch_size)
-            enc_out, h = encoder(inputs, enc_h)
-            dec_h = h
-            dec_in = torch.zeros(batch_size, targets.size(2)).to(device)
-            dec_out_lst = []
-            target_length = targets.size(1)      # assign SEQ_LEN as target length for now
-            # run for each word of the sequence (use teacher forcing)
-            for ti in range(target_length):
-                dec_out, dec_h, dec_attn = decoder(dec_h, enc_out, dec_in)
-                dec_out_lst.append(dec_out)
-#                loss += criterion(dec_out, targets[:,ti,:])
-                dec_in = dec_out
-    
-            outputs = torch.stack(dec_out_lst, dim=1)
-            
-#                    outputs, dec_h, wts = model(inputs, inputs)
-#                    _, preds = torch.max(outputs, 1)
-#                    loss = criterion(outputs, targets)     #torch.flip(targets, [1])
-
-        # statistics
-#        running_loss += loss.item()
-#                print("Iter : {} :: Running Loss : {}".format(bno, running_loss))
-#                running_corrects += torch.sum(preds == labels.data)
-        
-#                print("Batch No : {} / {}".format(bno, len(dataloaders[phase])))
-#                if (bno+1) % 10 == 0:
-#                    break
-            
-#            if phase == 'train':
-#                scheduler.step()
+            hidden = model.init_hidden(batch_size)
+            outputs, hidden = model(inputs, hidden)
+            gt_list.append(labels.tolist())
+            pred_list.append((torch.max(outputs, 1)[1]).tolist())
+            for i, vid in enumerate(vid_path):
+                stroke_ids.append(vid+"_"+str(stroke[0][i].item())+"_"+str(stroke[1][i].item()))
 
 #    epoch_loss = running_loss #/ len(dataloaders[phase].dataset)
 #            epoch_acc = running_corrects.double() / len(dataloaders[phase].dataset)
-
 #    print('{} Loss: {:.4f}'.format(phase, epoch_loss))
+                
+    confusion_mat = np.zeros((model.n_classes, model.n_classes))
+    gt_list = [g for batch_list in gt_list for g in batch_list]
+    pred_list = [p for batch_list in pred_list for p in batch_list]
+    prev_gt = stroke_ids[0]
+    val_labels, pred_labels, vid_preds = [], [], []
+    for i, pr in enumerate(pred_list):
+        if prev_gt != stroke_ids[i]:
+            # find max category predicted in pred_labels
+            val_labels.append(gt_list[i-1])
+            pred_labels.append(max(set(vid_preds), key = vid_preds.count))
+            vid_preds = []
+            prev_gt = stroke_ids[i]
+        vid_preds.append(pr)
+        
+    val_labels.append(gt_list[-1])
+    pred_labels.append(max(set(vid_preds), key = vid_preds.count))
+    correct = 0
+    for i,true_val in enumerate(val_labels):
+        if pred_labels[i] == true_val:
+            correct+=1
+        confusion_mat[pred_labels[i], true_val]+=1
+    print('#'*30)
+    print("GRU Sequence Classification Results:")
+    print("%d/%d Correct" % (correct, len(pred_labels)))
+    print("Accuracy = {} ".format( float(correct) / len(pred_labels)))
+    print("Confusion matrix")
+    print(confusion_mat)
+    return (float(correct) / len(pred_labels))
     
 
 def train_attn_model(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, 
@@ -308,7 +297,6 @@ def train_attn_model(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE,
     trajectories, stroke_names
     
     '''
-    
     ###########################################################################
     # Read the strokes 
     # Divide the highlight dataset files into training, validation and test sets
@@ -327,11 +315,11 @@ def train_attn_model(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE,
 #                                        #videotransforms.RandomHorizontalFlip(),\
 #                                        ])
     ft_path = os.path.join(base_name, ft_dir, feat)
-    train_dataset = StrokeFeaturePairsDataset(ft_path, train_lst, DATASET, LABELS, CLASS_IDS, 
+    train_dataset = StrokeFeatureSequenceDataset(ft_path, train_lst, DATASET, LABELS, CLASS_IDS, 
                                          frames_per_clip=SEQ_SIZE, extracted_frames_per_clip=2,
                                          step_between_clips=STEP, train=True)
     ft_path_val = os.path.join(base_name, ft_dir, feat_val)
-    val_dataset = StrokeFeaturePairsDataset(ft_path_val, val_lst, DATASET, LABELS, CLASS_IDS, 
+    val_dataset = StrokeFeatureSequenceDataset(ft_path_val, val_lst, DATASET, LABELS, CLASS_IDS, 
                                          frames_per_clip=SEQ_SIZE, extracted_frames_per_clip=2,
                                          step_between_clips=STEP, train=False)
     
@@ -348,83 +336,77 @@ def train_attn_model(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE,
     num_classes = len(list(set(labs_values)))
     
     ###########################################################################    
-    # load model and set loss function
-#    model = torchvision.models.video.r3d_18(pretrained=True, progress=True)
     
-    bidirectional = False
-    encoder = attn_model.Encoder(INPUT_SIZE, HIDDEN_SIZE, 1, bidirectional)
-    decoder = attn_model.AttentionDecoder(HIDDEN_SIZE*(1+bidirectional), TARGET_SIZE, 
-                               max_length=SEQ_SIZE-2+1)
-#    model = attn_model.AttentionEncoderDecoder(INPUT_SIZE, HIDDEN_SIZE, TARGET_SIZE, SEQ_SIZE-16+1)
-#    model = attn_model.Encoder(10, 20, bidirectional)
+    # load model and set loss function
+    model = attn_model.GRUClassifier(INPUT_SIZE, HIDDEN_SIZE, num_classes, 
+                                     N_LAYERS, bidirectional)
+    
+#    model = load_weights(base_name, model, N_EPOCHS, "Adam")
     
 #    for ft in model.parameters():
 #        ft.requires_grad = False
-#    
-#    inp_feat_size = model.fc.in_features
-#    model.fc = nn.Linear(inp_feat_size, num_classes)
-#    model = model.to(device)
-    encoder, decoder = encoder.to(device), decoder.to(device)
-    
-#    # load checkpoint:
-#    if os.path.isfile(os.path.join(base_name, "3dresnet18_ep"+str(N_EPOCHS)+"_Adam.pt")):
-#        model.load_state_dict(torch.load(os.path.join(base_name, "3dresnet18_ep"+str(N_EPOCHS)+"_Adam.pt")))
-    
+        
     # Setup the loss fxn
-#    criterion = nn.CrossEntropyLoss()
-    criterion = nn.MSELoss()
+    criterion = nn.CrossEntropyLoss()
     
 #    # Layers to finetune. Last layer should be displayed
 #    params_to_update = model.parameters()
-#    print("Params to learn:")
-#    
-#    params_to_update = []
-#    for name, param in model.named_parameters():
-#        if param.requires_grad == True:
-#            params_to_update.append(param)
-#            print("\t",name)
+#    print("Fix Weights : ")
+    
+    model = model.to(device)
+#    for name, param in model.encoder.named_parameters():
+#        print("Encoder : {}".format(name))
+#        param.requires_grad = False
+#    for name, param in model.decoder.named_parameters():
+#        print("Decoder : {}".format(name))
+#        param.requires_grad = False
+##    model.decoder.train(False)
+    print("Params to learn:")
+    params_to_update = []
+    for name, param in model.named_parameters():
+        if param.requires_grad == True:
+            params_to_update.append(param)
+            print("\t",name)
     
     # Observe that all parameters are being optimized
 #    optimizer_ft = torch.optim.Adam(params_to_update, lr=0.001)
-    encoder_optimizer = torch.optim.Adam(encoder.parameters(), lr=0.001)
-    decoder_optimizer = torch.optim.Adam(decoder.parameters(), lr=0.001)
+    optimizer_ft = torch.optim.SGD(params_to_update, lr=0.01, momentum=0.9)
     
     # Decay LR by a factor of 0.1 every 7 epochs
-    exp_lr_scheduler = StepLR(encoder_optimizer, step_size=8, gamma=0.1)
-    
-#    # Observe that all parameters are being optimized
-#    optimizer_ft = optim.SGD(params_to_update, lr=0.001, momentum=0.9)
+    exp_lr_scheduler = StepLR(optimizer_ft, step_size=10, gamma=0.1)
     
     features, stroke_names_id = read_feats(os.path.join(base_name, ft_dir), feat, snames)
     
-#    ###########################################################################
+    ###########################################################################
     # Training the model    
     
     start = time.time()
     
-    (encoder, decoder) = train_model(features, stroke_names_id, encoder, decoder, data_loaders, criterion, 
-                           encoder_optimizer, decoder_optimizer, exp_lr_scheduler, labs_keys, labs_values,
-                           num_epochs=N_EPOCHS)
-        
+    model = train_model(features, stroke_names_id, model, data_loaders, criterion, 
+                        optimizer_ft, exp_lr_scheduler, labs_keys, labs_values,
+                        num_epochs=N_EPOCHS)
+    
     end = time.time()
     
     # save the best performing model
-    save_model_checkpoint(base_name, (encoder, decoder), N_EPOCHS, "Adam")
+    save_model_checkpoint(base_name, model, N_EPOCHS, "Adam")
     # Load model checkpoints
-    encoder, decoder = load_model_checkpoint(base_name, encoder, decoder, N_EPOCHS, "Adam")
     
     print("Total Execution time for {} epoch : {}".format(N_EPOCHS, (end-start)))
 
-#    ###########################################################################    
+#    ###########################################################################
     
     features_val, stroke_names_id_val = read_feats(os.path.join(base_name, ft_dir), 
                                                    feat_val, snames_val)
     
-    predict(features_val, stroke_names_id_val, encoder, decoder, data_loaders,
-            labs_keys, labs_values, phase='test')
+    acc = predict(features_val, stroke_names_id_val, model, data_loaders, labs_keys, 
+                  labs_values, phase='test')
     
-    return None, None
-        
+    # call count_paramters(model)  for displaying total no. of parameters
+    print("#Parameters : {} ".format(count_parameters(model)))
+    
+    return acc
+
 
 if __name__ == '__main__':
     # Local Paths
@@ -433,17 +415,16 @@ if __name__ == '__main__':
     CLASS_IDS = "/home/arpan/VisionWorkspace/Cricket/cluster_strokes/configs/Class Index_Strokes.txt"    
     ANNOTATION_FILE = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/shots_classes.txt"
 
-    SEQ_SIZE = 6
-    STEP = 5
+    SEQ_SIZE = 15
+    STEP = 1
     NUM_LAYERS = 2
     BATCH_SIZE = 32
-    N_EPOCHS = 25
+    N_EPOCHS = 30
     base_path = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs"
     
-    trajectories, stroke_names = train_attn_model(DATASET, LABELS, CLASS_IDS, 
-                                                BATCH_SIZE, ANNOTATION_FILE,
-                                                SEQ_SIZE, STEP, nstrokes=-1, 
-                                                N_EPOCHS=N_EPOCHS, base_name=base_path)
+    acc = train_attn_model(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE,
+                           SEQ_SIZE, STEP, nstrokes=-1, N_EPOCHS=N_EPOCHS, 
+                           base_name=base_path)
 
 
 

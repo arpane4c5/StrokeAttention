@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Sun Jul 26 23:43:52 2020
+Created on Tue Aug  4 10:39:42 2020
 
 @author: arpan
 
-@Description: Train an Attention model on strokes
+@Description: Training Attention model on downstream task.
 """
 
 import os
@@ -85,32 +85,28 @@ def get_batch_labels(vid_path, stroke, labs_keys, labs_values):
         
 def save_model_checkpoint(base_name, model, ep, opt):
     """
-    TODO: save the optimizer state with epoch no. along with the weights
+    Save the optimizer state with epoch no. along with the weights
     """
     # Save only the model params
-    enc_name = os.path.join(base_name, "enc_attn_ep"+str(ep)+"_"+opt+".pt")
-    dec_name = os.path.join(base_name, "dec_attn_ep"+str(ep)+"_"+opt+".pt")
-#    if use_gpu and torch.cuda.device_count() > 1:
-#        model = model.module    # good idea to unwrap from DataParallel and save
+    model_name = os.path.join(base_name, "downstream_attn_ep"+str(ep)+"_"+opt+".pt")
 
-    torch.save(model[0].state_dict(), enc_name)
-    torch.save(model[1].state_dict(), dec_name)
-    print("Model saved to disk... \n Enc : {} \n Dec : {}".format(enc_name, dec_name))
-    
-def load_model_checkpoint(base_name, encoder, decoder, ep, opt):
+    torch.save(model.state_dict(), model_name)
+    print("Model saved to disk... : {}".format(model_name))
+
+def load_weights(base_name, model, ep, opt):
     """
-    Load the pretrained weights from disk
+    Load the pretrained weights to the models' encoder and decoder modules
     """
     # Paths to encoder and decoder files
     enc_name = os.path.join(base_name, "enc_attn_ep"+str(ep)+"_"+opt+".pt")
     dec_name = os.path.join(base_name, "dec_attn_ep"+str(ep)+"_"+opt+".pt")
     if os.path.isfile(enc_name):
-        encoder.load_state_dict(torch.load(enc_name))
+        model.encoder.load_state_dict(torch.load(enc_name))
         print("Loading Encoder weights... : {}".format(enc_name))
     if os.path.isfile(dec_name):
-        decoder.load_state_dict(torch.load(dec_name))
+        model.decoder.load_state_dict(torch.load(dec_name))
         print("Loading Decoder weights... : {}".format(dec_name))
-    return encoder, decoder
+    return model
     
 def read_feats(base_name, feat, snames):
     with open(os.path.join(base_name, feat), "rb") as fp:
@@ -120,12 +116,11 @@ def read_feats(base_name, feat, snames):
     return features, strokes_name_id
 
 
-def train_model(features, stroke_names_id, encoder, decoder, dataloaders, criterion, 
-                encoder_optimizer, decoder_optimizer, scheduler, labs_keys, 
-                labs_values, num_epochs=25):
+def train_model(features, stroke_names_id, model, dataloaders, criterion, 
+                optimizer, scheduler, labs_keys, labs_values, num_epochs=25):
     since = time.time()
 
-#    best_model_wts = copy.deepcopy(model.state_dict())
+    best_model_wts = copy.deepcopy(model.state_dict())
     best_acc = 0.0
 
     for epoch in range(num_epochs):
@@ -133,76 +128,72 @@ def train_model(features, stroke_names_id, encoder, decoder, dataloaders, criter
         print('-' * 10)
 
         # Each epoch has a training and validation phase
-        for phase in ['train']:
-#            if phase == 'train':
-#                model.train()  # Set model to training mode
-#            else:
-#                model.eval()   # Set model to evaluate mode
+        for phase in ['train', 'test']:
+            if phase == 'train':
+                model.train()  # Set model to training mode
+            else:
+                model.eval()   # Set model to evaluate mode
 
             running_loss = 0.0
             running_corrects = 0
 
             # Iterate over data.
-            for bno, (inputs, targets, vid_path, stroke, labels) in enumerate(dataloaders[phase]):
+            for bno, (inputs, _, vid_path, stroke, labels) in enumerate(dataloaders[phase]):
                 # inputs of shape BATCH x SEQ_LEN x FEATURE_DIM
                 labels = get_batch_labels(vid_path, stroke, labs_keys, labs_values)
                 # Extract spatio-temporal features from clip using 3D ResNet (For SL >= 16)
-#                inputs = inputs.permute(0, 2, 1, 3, 4).float()
-                
-                inputs, targets = inputs.to(device), targets.to(device)
+#                inputs = inputs.permute(0, 2, 1, 3, 4).float()                
+                inputs = inputs.to(device)
                 labels = labels.to(device)
 
                 # zero the parameter gradients
-                encoder_optimizer.zero_grad()
-                decoder_optimizer.zero_grad()
-                loss = 0
+                optimizer.zero_grad()
 
                 # forward
                 # track history if only in train
                 with torch.set_grad_enabled(phase == 'train'):
                     
-                    batch_size = inputs.size(0)
-                    enc_h = encoder.init_hidden(batch_size)
-                    enc_out, h = encoder(inputs, enc_h)
-                    dec_h = h
-                    dec_out_lst = []
-                    target_length = targets.size(1)      # assign SEQ_LEN as target length for now
-                    # run for each word of the sequence (use teacher forcing)
-                    for ti in range(target_length):
-                        dec_out, dec_h, dec_attn = decoder(dec_h, enc_out, targets[:,ti,:])
-                        dec_out_lst.append(dec_out)
-                        loss += criterion(dec_out, targets[:,ti,:])
-                        #decoder_input = target_tensor[di]  # Teacher forcing
-            
-                    outputs = torch.stack(dec_out_lst, dim=1)
+#                    batch_size = inputs.size(0)
+#                    loss = criterion(outputs, labels)
+#                    dec_h = h
+#                    dec_out_lst = []
+#                    target_length = targets.size(1)      # assign SEQ_LEN as target length for now
+#                    # run for each word of the sequence (use teacher forcing)
+#                    for ti in range(target_length):
+#                        dec_out, dec_h, dec_attn = decoder(dec_h, enc_out, targets[:,ti,:])
+#                        dec_out_lst.append(dec_out)
+#                        
+#                        #decoder_input = target_tensor[di]  # Teacher forcing
+#            
+#                    outputs = torch.stack(dec_out_lst, dim=1)
+                    dec_in = torch.zeros(inputs.size(0), inputs.size(2))  # (BATCH, OUTPUT)
+                    dec_in = dec_in.to(device)
                     
-#                    outputs, dec_h, wts = model(inputs, inputs)
-#                    _, preds = torch.max(outputs, 1)
-#                    loss = criterion(outputs, targets)     #torch.flip(targets, [1])
+                    outputs, dec_h, wts = model(inputs, dec_in)
+                    _, preds = torch.max(outputs, 1)
+                    loss = criterion(outputs, labels)     #torch.flip(targets, [1])
 
                     # backward + optimize only if in training phase
                     if phase == 'train':
                         loss.backward()
-                        encoder_optimizer.step()
-                        decoder_optimizer.step()
+                        optimizer.step()
 
                 # statistics
-                running_loss += loss.item()
+                running_loss += loss.item() * inputs.size(0)
 #                print("Iter : {} :: Running Loss : {}".format(bno, running_loss))
-#                running_corrects += torch.sum(preds == labels.data)
+                running_corrects += torch.sum(preds == labels.data)
                 
 #                print("Batch No : {} / {}".format(bno, len(dataloaders[phase])))
 #                if (bno+1) % 10 == 0:
 #                    break
                     
-#            if phase == 'train':
-#                scheduler.step()
+            if phase == 'train':
+                scheduler.step()
 
-            epoch_loss = running_loss #/ len(dataloaders[phase].dataset)
-#            epoch_acc = running_corrects.double() / len(dataloaders[phase].dataset)
+            epoch_loss = running_loss / len(dataloaders[phase].dataset)
+            epoch_acc = running_corrects.double() / len(dataloaders[phase].dataset)
 
-            print('{} Loss: {:.4f}'.format(
-                phase, epoch_loss))
+            print('{} Loss: {:.4f} Acc: {:.4f}'.format(phase, epoch_loss, epoch_acc))
 
 #            # deep copy the model
 #            if phase == 'test' and epoch_acc > best_acc:
@@ -210,7 +201,7 @@ def train_model(features, stroke_names_id, encoder, decoder, dataloaders, criter
 #                best_model_wts = copy.deepcopy(model.state_dict())
 
         print()
-
+        
     time_elapsed = time.time() - since
     print('Training complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, \
           time_elapsed % 60))
@@ -218,7 +209,7 @@ def train_model(features, stroke_names_id, encoder, decoder, dataloaders, criter
 
 #    # load best model weights
 #    model.load_state_dict(best_model_wts)
-    return encoder, decoder
+    return model
 
 def predict(features, stroke_names_id, encoder, decoder, dataloaders, labs_keys, 
             labs_values, phase="val"):
@@ -348,83 +339,78 @@ def train_attn_model(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE,
     num_classes = len(list(set(labs_values)))
     
     ###########################################################################    
-    # load model and set loss function
-#    model = torchvision.models.video.r3d_18(pretrained=True, progress=True)
     
+    # load model and set loss function
     bidirectional = False
-    encoder = attn_model.Encoder(INPUT_SIZE, HIDDEN_SIZE, 1, bidirectional)
-    decoder = attn_model.AttentionDecoder(HIDDEN_SIZE*(1+bidirectional), TARGET_SIZE, 
-                               max_length=SEQ_SIZE-2+1)
-#    model = attn_model.AttentionEncoderDecoder(INPUT_SIZE, HIDDEN_SIZE, TARGET_SIZE, SEQ_SIZE-16+1)
-#    model = attn_model.Encoder(10, 20, bidirectional)
+    
+    model = attn_model.AttentionEncoderDecoderClassifier(INPUT_SIZE, HIDDEN_SIZE, 
+                                                         TARGET_SIZE, SEQ_SIZE-2+1)
+    
+    model = load_weights(base_name, model, N_EPOCHS, "Adam")
     
 #    for ft in model.parameters():
 #        ft.requires_grad = False
-#    
-#    inp_feat_size = model.fc.in_features
-#    model.fc = nn.Linear(inp_feat_size, num_classes)
-#    model = model.to(device)
-    encoder, decoder = encoder.to(device), decoder.to(device)
-    
-#    # load checkpoint:
-#    if os.path.isfile(os.path.join(base_name, "3dresnet18_ep"+str(N_EPOCHS)+"_Adam.pt")):
-#        model.load_state_dict(torch.load(os.path.join(base_name, "3dresnet18_ep"+str(N_EPOCHS)+"_Adam.pt")))
-    
+        
     # Setup the loss fxn
-#    criterion = nn.CrossEntropyLoss()
-    criterion = nn.MSELoss()
+    criterion = nn.CrossEntropyLoss()
     
 #    # Layers to finetune. Last layer should be displayed
 #    params_to_update = model.parameters()
-#    print("Params to learn:")
-#    
-#    params_to_update = []
-#    for name, param in model.named_parameters():
-#        if param.requires_grad == True:
-#            params_to_update.append(param)
-#            print("\t",name)
+    print("Fix Weights : ")
+    
+    model = model.to(device)
+    for name, param in model.encoder.named_parameters():
+        print("Encoder : {}".format(name))
+        param.requires_grad = False
+    for name, param in model.decoder.named_parameters():
+        print("Decoder : {}".format(name))
+        param.requires_grad = False
+#    model.decoder.train(False)
+    print("Params to learn:")
+    params_to_update = []
+    for name, param in model.named_parameters():
+        if param.requires_grad == True:
+            params_to_update.append(param)
+            print("\t",name)
     
     # Observe that all parameters are being optimized
-#    optimizer_ft = torch.optim.Adam(params_to_update, lr=0.001)
-    encoder_optimizer = torch.optim.Adam(encoder.parameters(), lr=0.001)
-    decoder_optimizer = torch.optim.Adam(decoder.parameters(), lr=0.001)
+    optimizer_ft = torch.optim.Adam(params_to_update, lr=0.001)
     
     # Decay LR by a factor of 0.1 every 7 epochs
-    exp_lr_scheduler = StepLR(encoder_optimizer, step_size=8, gamma=0.1)
+    exp_lr_scheduler = StepLR(optimizer_ft, step_size=8, gamma=0.1)
     
 #    # Observe that all parameters are being optimized
 #    optimizer_ft = optim.SGD(params_to_update, lr=0.001, momentum=0.9)
     
     features, stroke_names_id = read_feats(os.path.join(base_name, ft_dir), feat, snames)
     
-#    ###########################################################################
+    ###########################################################################
     # Training the model    
     
     start = time.time()
     
-    (encoder, decoder) = train_model(features, stroke_names_id, encoder, decoder, data_loaders, criterion, 
-                           encoder_optimizer, decoder_optimizer, exp_lr_scheduler, labs_keys, labs_values,
-                           num_epochs=N_EPOCHS)
-        
+    model = train_model(features, stroke_names_id, model, data_loaders, criterion, 
+                        optimizer_ft, exp_lr_scheduler, labs_keys, labs_values,
+                        num_epochs=N_EPOCHS)
+    
     end = time.time()
     
     # save the best performing model
-    save_model_checkpoint(base_name, (encoder, decoder), N_EPOCHS, "Adam")
+    save_model_checkpoint(base_name, model, N_EPOCHS, "Adam")
     # Load model checkpoints
-    encoder, decoder = load_model_checkpoint(base_name, encoder, decoder, N_EPOCHS, "Adam")
     
     print("Total Execution time for {} epoch : {}".format(N_EPOCHS, (end-start)))
 
-#    ###########################################################################    
+#    ###########################################################################
     
     features_val, stroke_names_id_val = read_feats(os.path.join(base_name, ft_dir), 
                                                    feat_val, snames_val)
     
-    predict(features_val, stroke_names_id_val, encoder, decoder, data_loaders,
-            labs_keys, labs_values, phase='test')
+    predict(features_val, stroke_names_id_val, model, data_loaders, labs_keys, 
+            labs_values, phase='test')
     
     return None, None
-        
+
 
 if __name__ == '__main__':
     # Local Paths

@@ -145,6 +145,77 @@ class AttentionEncoderDecoder(nn.Module):
             #decoder_input = target_tensor[di]  # Teacher forcing
             
         return torch.stack(dec_out_lst, dim=1), dec_h, dec_attn
+    
+class AttentionEncoderDecoderClassifier(nn.Module):
+    
+    def __init__(self, input_size, hidden_size, output_size, seq_len, n_classes=5, 
+                 n_layers=1, bidirectional=False):
+        super(AttentionEncoderDecoderClassifier, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+        self.n_classes = n_classes
+        self.encoder = Encoder(input_size, hidden_size, n_layers, bidirectional)
+        self.decoder = AttentionDecoder(hidden_size*(1+bidirectional), output_size, 
+                                        max_length=seq_len)
+        self.classifier = nn.Linear(output_size, n_classes)
+        
+    def forward(self, inputs, dec_in):
+        
+        batch_size = inputs.size(0)
+        enc_h = self.encoder.init_hidden(batch_size)
+        enc_out, h = self.encoder(inputs, enc_h)
+        
+#        dec_h = self.decoder.init_hidden(batch_size)
+        dec_h = h
+#        enc_out = torch.cat((enc_out, enc_out))
+#        dec_inp = torch.zeros(1, 1, self.vocab_size)
+#        dec_out_lst = []
+        # run for entire batch all at once at the time of classification
+        dec_out, dec_h, dec_attn = self.decoder(dec_h, enc_out, dec_in)
+#        for ti in range(target_length):
+#            dec_out, dec_h, dec_attn = self.decoder(dec_h, enc_out, targets[:,ti,:])
+        out = self.classifier(dec_out)
+#        dec_out_lst.append(dec_out)
+        #decoder_input = target_tensor[di]  # Teacher forcing
+            
+        return out, dec_h, dec_attn
+
+class GRUClassifier(nn.Module):
+    
+    def __init__(self, input_size, hidden_size, n_classes, n_layers=1, 
+                 bidirectional=False):
+        super(GRUClassifier, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.n_classes = n_classes
+        self.n_directions = int(bidirectional) + 1
+        self.n_layers = n_layers
+#        self.lstm = nn.LSTM(input_size, hidden_size, bidirectional = bidirectional)
+        self.gru1 = nn.GRU(input_size, hidden_size, n_layers, batch_first=True,
+                          bidirectional=bidirectional)
+        self.gru2 = nn.GRU(hidden_size, hidden_size, n_layers, batch_first=True,
+                          bidirectional=bidirectional)        
+        self.fc = nn.Linear(hidden_size, hidden_size)
+        self.classifier = nn.Linear(hidden_size, n_classes)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(p=0.5)
+        self.softmax = nn.Softmax(dim=1)
+        
+    def forward(self, inputs, hidden):
+        batch_size = inputs.size(0)
+        output, hidden = self.gru1(inputs.view(batch_size, -1, self.input_size), hidden)
+        output, hidden = self.gru2(output, hidden)
+        hidden = self.dropout(self.relu(self.fc(hidden.squeeze(0))))
+#        output = self.dropout(self.relu(self.fc(output.contiguous().view(-1, self.hidden_size))))
+        logits = self.classifier(hidden)
+        probs = self.softmax(logits.view(-1, self.n_classes))
+        return probs, hidden
+    
+    def init_hidden(self, batch_size):
+        enc_h = torch.zeros(self.n_directions * self.n_layers, batch_size, self.hidden_size)
+        enc_h = enc_h.to(device)        
+        return enc_h
         
 
 if __name__ == '__main__':
