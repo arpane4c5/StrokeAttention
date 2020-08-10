@@ -181,6 +181,45 @@ class AttentionEncoderDecoderClassifier(nn.Module):
             
         return out, dec_h, dec_attn
 
+class GRUBoWClassifier(nn.Module):
+    
+    def __init__(self, input_size, hidden_size, n_classes, n_layers=1, 
+                 bidirectional=False):
+        super(GRUClassifier, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.n_classes = n_classes
+        self.n_directions = int(bidirectional) + 1
+        self.n_layers = n_layers
+#        self.lstm = nn.LSTM(input_size, hidden_size, bidirectional = bidirectional)
+        self.embedding = nn.Embedding(self.input_size, self.hidden_size)
+        self.gru1 = nn.GRU(hidden_size, hidden_size, n_layers, batch_first=True,
+                          bidirectional=bidirectional)
+#        self.gru2 = nn.GRU(hidden_size, hidden_size, n_layers, batch_first=True,
+#                          bidirectional=bidirectional)        
+        self.fc = nn.Linear(hidden_size * self.n_directions, hidden_size)
+        self.classifier = nn.Linear(hidden_size, n_classes)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(p=0.5)
+        self.softmax = nn.Softmax(dim=1)
+        
+    def forward(self, inputs, hidden):
+        batch_size = inputs.size(0)
+        emb = self.embedding(inputs)
+        output, hidden = self.gru1(emb, hidden)
+#        output, hidden = self.gru2(output, hidden)
+#        hidden = self.dropout(self.relu(self.fc(hidden.squeeze(0))))
+#        output = self.dropout(self.relu(self.fc(output.contiguous().view(-1, self.hidden_size))))
+        output = self.dropout(self.fc(output[:,-1,:]))
+        logits = self.classifier(output)
+        probs = self.softmax(logits.view(-1, self.n_classes))
+        return probs, hidden
+    
+    def init_hidden(self, batch_size):
+        enc_h = torch.zeros(self.n_directions * self.n_layers, batch_size, self.hidden_size)
+        enc_h = enc_h.to(device)
+        return enc_h
+        
 class GRUClassifier(nn.Module):
     
     def __init__(self, input_size, hidden_size, n_classes, n_layers=1, 
@@ -194,9 +233,9 @@ class GRUClassifier(nn.Module):
 #        self.lstm = nn.LSTM(input_size, hidden_size, bidirectional = bidirectional)
         self.gru1 = nn.GRU(input_size, hidden_size, n_layers, batch_first=True,
                           bidirectional=bidirectional)
-        self.gru2 = nn.GRU(hidden_size, hidden_size, n_layers, batch_first=True,
-                          bidirectional=bidirectional)        
-        self.fc = nn.Linear(hidden_size, hidden_size)
+#        self.gru2 = nn.GRU(hidden_size, hidden_size, n_layers, batch_first=True,
+#                          bidirectional=bidirectional)
+        self.fc = nn.Linear(hidden_size * self.n_directions, hidden_size)
         self.classifier = nn.Linear(hidden_size, n_classes)
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(p=0.5)
@@ -204,19 +243,19 @@ class GRUClassifier(nn.Module):
         
     def forward(self, inputs, hidden):
         batch_size = inputs.size(0)
-        output, hidden = self.gru1(inputs.view(batch_size, -1, self.input_size), hidden)
-        output, hidden = self.gru2(output, hidden)
-        hidden = self.dropout(self.relu(self.fc(hidden.squeeze(0))))
+        output, hidden = self.gru1(inputs, hidden)
+#        output, hidden = self.gru2(output, hidden)
+#        hidden = self.dropout(self.relu(self.fc(hidden.squeeze(0))))
 #        output = self.dropout(self.relu(self.fc(output.contiguous().view(-1, self.hidden_size))))
-        logits = self.classifier(hidden)
+        output = self.dropout(self.fc(output[:,-1,:]))
+        logits = self.classifier(output)
         probs = self.softmax(logits.view(-1, self.n_classes))
         return probs, hidden
     
     def init_hidden(self, batch_size):
         enc_h = torch.zeros(self.n_directions * self.n_layers, batch_size, self.hidden_size)
-        enc_h = enc_h.to(device)        
+        enc_h = enc_h.to(device)
         return enc_h
-        
 
 if __name__ == '__main__':
     bidirectional = False

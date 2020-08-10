@@ -5,7 +5,7 @@ Created on Tue Aug 5 10:39:42 2020
 
 @author: arpan
 
-@Description: Training GRU model on sequence classification.
+@Description: Training GRU model on BoV sequence classification.
 """
 
 import os
@@ -28,18 +28,24 @@ from datasets.dataset import StrokeFeatureSequenceDataset
 #from datasets.dataset import StrokeFeaturePairsDataset
 import copy
 import time
+import pickle
 import attn_model
 import attn_utils
 from collections import Counter
+from create_bovw import make_codebook
+from create_bovw import create_bovw_onehot
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 ft_dir = "bow_HL_ofAng_grid20"
 feat, feat_val = "of_feats_grid20.pkl", "of_feats_val_grid20.pkl"
 snames, snames_val = "of_snames_grid20.pkl", "of_snames_val_grid20.pkl"
-INPUT_SIZE = 576      # OFGRID: 576, 3DCNN: 512, 2DCNN: 2048
-HIDDEN_SIZE = 512
-N_LAYERS = 1
-bidirectional = False
+cluster_size = 1000
+INPUT_SIZE = cluster_size      # OFGRID: 576, 3DCNN: 512, 2DCNN: 2048
+HIDDEN_SIZE = 256
+N_LAYERS = 2
+bidirectional = True
+
+km_filename = "km_onehot"
 
 
 def train_model(features, stroke_names_id, model, dataloaders, criterion, 
@@ -70,8 +76,9 @@ def train_model(features, stroke_names_id, model, dataloaders, criterion,
                 # inputs of shape BATCH x SEQ_LEN x FEATURE_DIM
                 labels = attn_utils.get_batch_labels(vid_path, stroke, labs_keys, labs_values, 1)
                 # Extract spatio-temporal features from clip using 3D ResNet (For SL >= 16)
-#                inputs = inputs.permute(0, 2, 1, 3, 4).float()                
-                inputs = inputs.to(device)
+                inp_emb = attn_utils.get_long_tensor(inputs)
+                
+                inputs = inp_emb.to(device)
                 labels = labels.to(device)
                 iter_counts = Counter(labels.tolist())
                 for k,v in iter_counts.items():
@@ -79,11 +86,9 @@ def train_model(features, stroke_names_id, model, dataloaders, criterion,
                 
                 # zero the parameter gradients
                 optimizer.zero_grad()
-
                 # forward
                 # track history if only in train
                 with torch.set_grad_enabled(phase == 'train'):
-                    
                     hidden = model.init_hidden(inputs.size(0))
                     
                     outputs, hidden = model(inputs, hidden)
@@ -99,11 +104,7 @@ def train_model(features, stroke_names_id, model, dataloaders, criterion,
                 running_loss += loss.item() * inputs.size(0)
 #                print("Iter : {} :: Running Loss : {}".format(bno, running_loss))
                 running_corrects += torch.sum(preds == labels.data)
-                
-#                print("Batch No : {} / {}".format(bno, len(dataloaders[phase])))
-#                if (bno+1) % 10 == 0:
-#                    break
-                    
+                                    
             if phase == 'train':
                 scheduler.step()
 
@@ -112,7 +113,7 @@ def train_model(features, stroke_names_id, model, dataloaders, criterion,
 
             print('{} Loss: {:.4f} Acc: {:.4f}'.format(phase, epoch_loss, epoch_acc))
 
-#            # deep copy the model
+#            # deep copy the model for best test accuracy
             if phase == 'test' and epoch_acc > best_acc:
                 best_acc = epoch_acc
                 best_model_wts = copy.deepcopy(model.state_dict())
@@ -138,7 +139,8 @@ def predict(features, stroke_names_id, model, dataloaders, labs_keys, labs_value
         # inputs of shape BATCH x SEQ_LEN x FEATURE_DIM
         labels = attn_utils.get_batch_labels(vid_path, stroke, labs_keys, labs_values, 1)
         
-        inputs = inputs.to(device)
+        inp_emb = attn_utils.get_long_tensor(inputs)
+        inputs = inp_emb.to(device)
         labels = labels.to(device)
         # forward
         with torch.set_grad_enabled(phase == 'train'):
@@ -213,13 +215,57 @@ def train_attn_model(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE,
     trajectories, stroke_names
     
     '''
-    attn_utils.seed_everything(123)
     ###########################################################################
     # Read the strokes 
     # Divide the highlight dataset files into training, validation and test sets
     train_lst, val_lst, test_lst = autoenc_utils.split_dataset_files(DATASET)
     print("No. of training videos : {}".format(len(train_lst)))
         
+    features, stroke_names_id = attn_utils.read_feats(os.path.join(base_name, ft_dir), 
+                                                      feat, snames)
+    # get matrix of features from dictionary (N, vec_size)
+    vecs = []
+    for key in sorted(list(features.keys())):
+        vecs.append(features[key])
+    vecs = np.vstack(vecs)
+    
+    vecs[np.isnan(vecs)] = 0
+    vecs[np.isinf(vecs)] = 0
+    
+    #fc7 layer output size (4096) 
+    INP_VEC_SIZE = vecs.shape[-1]
+    print("INP_VEC_SIZE = ", INP_VEC_SIZE)
+    
+    km_filepath = km_filename
+#    # Uncomment only while training.
+    if not os.path.isfile(km_filepath+"_C"+str(cluster_size)+".pkl"):
+        km_model = make_codebook(vecs, cluster_size)  #, model_type='gmm') 
+        ##    # Save to disk, if training is performed
+        print("Writing the KMeans models to disk...")
+        pickle.dump(km_model, open(km_filepath+"_C"+str(cluster_size)+".pkl", "wb"))
+    else:
+        # Load from disk, for validation and test sets.
+        km_model = pickle.load(open(km_filepath+"_C"+str(cluster_size)+".pkl", 'rb'))
+        
+    print("Create numpy one hot representation for train features...")
+    onehot_feats = create_bovw_onehot(features, stroke_names_id, km_model)
+    
+    ft_path = os.path.join(os.getcwd(), "onehot_C"+str(cluster_size)+"_train.pkl")
+    with open(ft_path, "wb") as fp:
+        pickle.dump(onehot_feats, fp)
+    
+    ###########################################################################
+    
+    features_val, stroke_names_id_val = attn_utils.read_feats(os.path.join(base_name, ft_dir), 
+                                                              feat_val, snames_val)
+    
+    print("Create numpy one hot representation for val features...")
+    onehot_feats_val = create_bovw_onehot(features_val, stroke_names_id_val, km_model)
+    
+    ft_path_val = os.path.join(os.getcwd(), "onehot_C"+str(cluster_size)+"_val.pkl")
+    with open(ft_path_val, "wb") as fp:
+        pickle.dump(onehot_feats_val, fp)    
+    
     ###########################################################################
     # Create a Dataset    
     # Clip level transform. Use this with framewiseTransform flag turned off
@@ -231,11 +277,11 @@ def train_attn_model(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE,
 #                                         videotransforms.Normalize(),
 #                                        #videotransforms.RandomHorizontalFlip(),\
 #                                        ])
-    ft_path = os.path.join(base_name, ft_dir, feat)
+#    ft_path = os.path.join(base_name, ft_dir, feat)
     train_dataset = StrokeFeatureSequenceDataset(ft_path, train_lst, DATASET, LABELS, CLASS_IDS, 
                                          frames_per_clip=SEQ_SIZE, extracted_frames_per_clip=2,
                                          step_between_clips=STEP, train=True)
-    ft_path_val = os.path.join(base_name, ft_dir, feat_val)
+#    ft_path_val = os.path.join(base_name, ft_dir, feat_val)
     val_dataset = StrokeFeatureSequenceDataset(ft_path_val, val_lst, DATASET, LABELS, CLASS_IDS, 
                                          frames_per_clip=SEQ_SIZE, extracted_frames_per_clip=2,
                                          step_between_clips=STEP, train=False)
@@ -248,7 +294,7 @@ def train_attn_model(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE,
     sampler = WeightedRandomSampler(samples_weight, len(samples_weight))
     
     train_loader = DataLoader(dataset=train_dataset, batch_size=BATCH_SIZE, 
-                              sampler=sampler)
+                              sampler=sampler, worker_init_fn=np.random.seed(12))
     
     val_loader = DataLoader(dataset=val_dataset, batch_size=BATCH_SIZE, shuffle=False)
     
@@ -259,7 +305,7 @@ def train_attn_model(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE,
     ###########################################################################    
     
     # load model and set loss function
-    model = attn_model.GRUClassifier(INPUT_SIZE, HIDDEN_SIZE, num_classes, 
+    model = attn_model.GRUBoWClassifier(INPUT_SIZE, HIDDEN_SIZE, num_classes, 
                                      N_LAYERS, bidirectional)
     
 #    model = load_weights(base_name, model, N_EPOCHS, "Adam")
@@ -284,11 +330,9 @@ def train_attn_model(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE,
     # Decay LR by a factor of 0.1 every 7 epochs
     exp_lr_scheduler = StepLR(optimizer_ft, step_size=10, gamma=0.1)
     
-    features, stroke_names_id = attn_utils.read_feats(os.path.join(base_name, ft_dir), 
-                                                      feat, snames)
-    
     ###########################################################################
     # Training the model    
+    
     start = time.time()
     
     model = train_model(features, stroke_names_id, model, data_loaders, criterion, 
@@ -305,10 +349,6 @@ def train_attn_model(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE,
 
 #    ###########################################################################
     
-    features_val, stroke_names_id_val = attn_utils.read_feats(os.path.join(base_name, 
-                                                                           ft_dir), 
-                                                              feat_val, snames_val)
-    
     acc = predict(features_val, stroke_names_id_val, model, data_loaders, labs_keys, 
                   labs_values, phase='test')
     
@@ -324,9 +364,8 @@ if __name__ == '__main__':
     CLASS_IDS = "/home/arpan/VisionWorkspace/Cricket/cluster_strokes/configs/Class Index_Strokes.txt"    
     ANNOTATION_FILE = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/shots_classes.txt"
 
-    SEQ_SIZE = 2
+    SEQ_SIZE = 3
     STEP = 1
-    NUM_LAYERS = 2
     BATCH_SIZE = 32
     N_EPOCHS = 30
     base_path = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs"
