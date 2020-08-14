@@ -34,6 +34,7 @@ import attn_utils
 from collections import Counter
 from create_bovw import make_codebook
 from create_bovw import create_bovw_onehot
+from create_bovw import vis_cluster
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 ft_dir = "bow_HL_ofAng_grid20"
@@ -302,6 +303,8 @@ def train_attn_model(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE,
 
     num_classes = len(list(set(labs_values)))
     
+    vis_cluster(onehot_feats, stroke_names_id, km_model, 3, 2, DATASET, "logs")
+    
     ###########################################################################    
     
     # load model and set loss function
@@ -367,7 +370,7 @@ if __name__ == '__main__':
     SEQ_SIZE = 3
     STEP = 1
     BATCH_SIZE = 32
-    N_EPOCHS = 30
+    N_EPOCHS = 3
     base_path = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs"
     
     attn_utils.seed_everything(1234)

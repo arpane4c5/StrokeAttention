@@ -185,7 +185,7 @@ class GRUBoWClassifier(nn.Module):
     
     def __init__(self, input_size, hidden_size, n_classes, n_layers=1, 
                  bidirectional=False):
-        super(GRUClassifier, self).__init__()
+        super(GRUBoWClassifier, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.n_classes = n_classes

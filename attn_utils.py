@@ -128,7 +128,34 @@ def load_weights(base_name, model, ep, opt):
         model.load_state_dict(torch.load(model_name))
         print("Loading Encoder weights... : {}".format(model_name))
     return model
+
+def save_attn_model_checkpoint(base_name, model, ep, opt):
+    """
+    Save the optimizer state with epoch no. along with the weights
+    """
+    # Save only the model params
+    enc_name = os.path.join(base_name, "enc_attn_ep"+str(ep)+"_"+opt+".pt")
+    dec_name = os.path.join(base_name, "dec_attn_ep"+str(ep)+"_"+opt+".pt")
+
+    torch.save(model[0].state_dict(), enc_name)
+    torch.save(model[1].state_dict(), dec_name)
+    print("Model saved to disk... \n Enc : {} \n Dec : {}".format(enc_name, dec_name))
     
+def load_attn_model_checkpoint(base_name, encoder, decoder, ep, opt):
+    """
+    Load the pretrained weights from disk
+    """
+    # Paths to encoder and decoder files
+    enc_name = os.path.join(base_name, "enc_attn_ep"+str(ep)+"_"+opt+".pt")
+    dec_name = os.path.join(base_name, "dec_attn_ep"+str(ep)+"_"+opt+".pt")
+    if os.path.isfile(enc_name):
+        encoder.load_state_dict(torch.load(enc_name))
+        print("Loading Encoder weights... : {}".format(enc_name))
+    if os.path.isfile(dec_name):
+        decoder.load_state_dict(torch.load(dec_name))
+        print("Loading Decoder weights... : {}".format(dec_name))
+    return encoder, decoder    
+
 def read_feats(base_name, feat, snames):
     with open(os.path.join(base_name, feat), "rb") as fp:
         features = pickle.load(fp)

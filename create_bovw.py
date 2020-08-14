@@ -15,6 +15,81 @@ import os
 from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import normalize
+import cv2
+
+def get_frame(datasetpath, video_key, position, offset=2):
+    vid = video_key.rsplit('_', 2)
+    vid_name = vid[0]+'.avi'
+    st, _ = int(vid[1]), int(vid[2])
+    cap = cv2.VideoCapture(os.path.join(datasetpath, vid_name))
+    if not cap.isOpened():
+        return None
+    cap.set(cv2.CAP_PROP_POS_FRAMES, st+position+offset-1)
+    _, img = cap.read()
+    cap.release()
+    return img
+
+def vis_cluster(features, strokes_name_id, model, cl_no, offset, ds_path, base=""):
+    '''
+    searches the data partition for clusters and writes frames corresponding to 
+    the given cluster number.
+    
+    Parameters:
+    ------
+    features: dict
+        {'video_id1':np.array((N, d)), ...}  , where d is vec dimension
+    strokes_name_id: list of str
+        key values of features, eg. video-name_34_242 
+    km_model: KMeans / GaussianMixture obj
+        Learned KMeans / GMM model with nClusters / nComponents
+        
+    '''
+    # create path
+    dest_dir = os.path.join(base, str(cl_no))
+    if not os.path.exists(dest_dir):
+        os.makedirs(dest_dir)
+
+    count, max_frms = 0, 40
+    # Make bow vectors for all videos.
+    for video_index, video in enumerate(strokes_name_id):
+        # Get the starting and ending stroke frame positions        
+        m, n = video.rsplit('_', 2)[1:]
+        m, n = int(m), int(n)
+        
+        stroke_feats = features[video]
+        # get rows indexes where cluster cl_no is assigned to frame no.
+        frm_pos = np.where(stroke_feats[:,cl_no] > 0)[0]
+        for frm_no in frm_pos:
+            # retrieve the frame positions 
+            img = get_frame(ds_path, video, frm_no, offset)
+            cv2.imwrite(os.path.join(dest_dir, video+"_"+str(frm_no)+".png"), img)
+            count+=1
+            if count > max_frms:
+                break
+#            cv2.imshow("Stroke {}_{} : F{}".format(m, n, frm_no), img)
+#            direction = waitTillEscPressed()
+        if count > max_frms:
+            break
+    return 
+
+def waitTillEscPressed():
+    while(True):
+        # For moving forward
+        if cv2.waitKey(0)==27:
+            print("Esc Pressed. Move Forward.")
+            return 1
+        # For moving back
+        elif cv2.waitKey(0)==98:
+            print("'b' pressed. Move Back.")
+            return 0
+        # start of shot
+        elif cv2.waitKey(0)==115:
+            print("'s' pressed. Start of shot.")
+            return 2
+        # end of shot
+        elif cv2.waitKey(0)==102:
+            print("'f' pressed. End of shot.")
+            return 3
 
 def make_codebook(vecs, nclusters, model_type="kmeans"):
     """

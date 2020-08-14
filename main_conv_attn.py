@@ -16,9 +16,6 @@ import numpy as np
 sys.path.insert(0, '../cluster_strokes')
 sys.path.insert(0, '../cluster_strokes/lib')
 
-#from utils.extract_autoenc_feats import extract_3DCNN_feats
-#from utils.extract_autoenc_feats import extract_2DCNN_feats
-#from utils import trajectory_utils as traj_utils
 ##from utils import spectral_utils
 #from utils import plot_utils
 #from evaluation import eval_of_clusters
@@ -30,13 +27,13 @@ from torch.utils.data import DataLoader
 
 #from utils.resnet_feature_extracter import Clip2Vec
 from utils import autoenc_utils
-#import datasets.videotransforms as videotransforms
+import datasets.videotransforms as videotransforms
 #from datasets.dataset import StrokeFeatureSequenceDataset
-from datasets.dataset import StrokeFeaturePairsDataset
+from datasets.dataset import CricketStrokesDataset
 import copy
 import time
 import pickle
-import attn_model
+import conv_attn_model
 import attn_utils
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -44,10 +41,19 @@ base_path = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/l
 ft_dir = "bow_HL_ofAng_grid20"
 feat, feat_val = "of_feats_grid20.pkl", "of_feats_val_grid20.pkl"
 snames, snames_val = "of_snames_grid20.pkl", "of_snames_val_grid20.pkl"
-INPUT_SIZE, TARGET_SIZE = 576, 576      # OFGRID: 576, 3DCNN: 512, 2DCNN: 2048
-HIDDEN_SIZE = 256 #64#1024
+#INPUT_SIZE, TARGET_SIZE = 576, 576      # OFGRID: 576, 3DCNN: 512, 2DCNN: 2048
+HIDDEN_SIZE = 128 #64#1024
 bidirectional = False
 
+def copy_pretrained_weights(model_src, model_tar):
+    params_src = model_src.named_parameters()
+    params_tar = model_tar.named_parameters()
+    dict_params_tar = dict(params_tar)
+    for name_src, param_src in params_src:
+        if name_src in dict_params_tar:
+            dict_params_tar[name_src].data.copy_(param_src.data)
+            dict_params_tar[name_src].requires_grad = False     # Freeze layer wts
+            
 
 def train_model(features, stroke_names_id, encoder, decoder, dataloaders, criterion, 
                 encoder_optimizer, decoder_optimizer, scheduler, labs_keys, 
@@ -72,14 +78,16 @@ def train_model(features, stroke_names_id, encoder, decoder, dataloaders, criter
             running_corrects = 0
 
             # Iterate over data.
-            for bno, (inputs, targets, vid_path, stroke, labels) in enumerate(dataloaders[phase]):
+            for bno, (inputs, vid_path, stroke, labels) in enumerate(dataloaders[phase]):
                 # inputs of shape BATCH x SEQ_LEN x FEATURE_DIM
                 labels = attn_utils.get_batch_labels(vid_path, stroke, labs_keys, labs_values, 1)
                 # Extract spatio-temporal features from clip using 3D ResNet (For SL >= 16)
-#                inputs = inputs.permute(0, 2, 1, 3, 4).float()
+                inputs = inputs.permute(0, 2, 1, 3, 4).float()
                 
-                inputs, targets = inputs.to(device), targets.to(device)
-                labels = labels.to(device)
+                targets = inputs
+                inputs = inputs.to(device)
+#                inputs, targets = inputs.to(device), targets.to(device)
+#                labels = labels.to(device)
 
                 # zero the parameter gradients
                 encoder_optimizer.zero_grad()
@@ -91,19 +99,23 @@ def train_model(features, stroke_names_id, encoder, decoder, dataloaders, criter
                 with torch.set_grad_enabled(phase == 'train'):
                     
                     batch_size = inputs.size(0)
-                    enc_h = encoder.init_hidden(batch_size)
+                    enc_h = encoder._init_hidden(batch_size)
                     enc_out, h = encoder(inputs, enc_h)
-                    dec_h = h
-                    dec_out_lst = []
-                    target_length = targets.size(1)      # assign SEQ_LEN as target length for now
-                    # run for each word of the sequence (use teacher forcing)
-                    for ti in range(target_length):
-                        dec_out, dec_h, dec_attn = decoder(dec_h, enc_out, targets[:,ti,:])
-                        dec_out_lst.append(dec_out)
-                        loss += criterion(dec_out, targets[:,ti,:])
-                        #decoder_input = target_tensor[di]  # Teacher forcing
-            
-                    outputs = torch.stack(dec_out_lst, dim=1)
+                    dec_out, attn_wts_lst = decoder(h, enc_out)
+                    
+                    loss = criterion(dec_out, inputs)
+                    
+#                    dec_h = h
+#                    dec_out_lst = []
+#                    target_length = targets.size(1)      # assign SEQ_LEN as target length for now
+#                    # run for each word of the sequence (use teacher forcing)
+#                    for ti in range(target_length):
+#                        dec_out, dec_h, dec_attn = decoder(dec_h, enc_out, targets[:,ti,:])
+#                        dec_out_lst.append(dec_out)
+#                        loss += criterion(dec_out, targets[:,ti,:])
+#                        #decoder_input = target_tensor[di]  # Teacher forcing
+#            
+#                    outputs = torch.stack(dec_out_lst, dim=1)
                     
 #                    outputs, dec_h, wts = model(inputs, inputs)
 #                    _, preds = torch.max(outputs, 1)
@@ -117,12 +129,13 @@ def train_model(features, stroke_names_id, encoder, decoder, dataloaders, criter
 
                 # statistics
                 running_loss += loss.item()
-#                print("Iter : {} :: Running Loss : {}".format(bno, running_loss))
+#                print("Iter : {} / {} :: Running Loss : {}".format(bno, 
+#                      len(dataloaders[phase]), running_loss))
 #                running_corrects += torch.sum(preds == labels.data)
                 
 #                print("Batch No : {} / {}".format(bno, len(dataloaders[phase])))
-#                if (bno+1) % 10 == 0:
-#                    break
+                if (bno+1) % 10 == 0:
+                    break
                     
             if phase == 'train':
                 scheduler.step()
@@ -208,8 +221,8 @@ def predict(features, stroke_names_id, encoder, decoder, dataloaders, labs_keys,
 #    print('{} Loss: {:.4f}'.format(phase, epoch_loss))
     
 
-def train_attn_model(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, 
-                   SEQ_SIZE=16, STEP=16, nstrokes=-1, N_EPOCHS=25, base_name=""):
+def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16, 
+         STEP=16, nstrokes=-1, N_EPOCHS=25, base_name=""):
     '''
     Extract sequence features from AutoEncoder.
     
@@ -237,7 +250,6 @@ def train_attn_model(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE,
     trajectories, stroke_names
     
     '''
-    
     ###########################################################################
     # Read the strokes 
     # Divide the highlight dataset files into training, validation and test sets
@@ -247,22 +259,22 @@ def train_attn_model(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE,
     ###########################################################################
     # Create a Dataset    
     # Clip level transform. Use this with framewiseTransform flag turned off
-#    clip_transform = transforms.Compose([videotransforms.CenterCrop(224),
-#                                         videotransforms.ToPILClip(), 
-#                                         videotransforms.Resize((112, 112)),
-##                                         videotransforms.RandomCrop(112), 
-#                                         videotransforms.ToTensor(), 
+    clip_transform = transforms.Compose([videotransforms.CenterCrop(224),
+                                         videotransforms.ToPILClip(), 
+                                         videotransforms.Resize((112, 112)),
+#                                         videotransforms.RandomCrop(112), 
+                                         videotransforms.ToTensor(), 
 #                                         videotransforms.Normalize(),
-#                                        #videotransforms.RandomHorizontalFlip(),\
-#                                        ])
-    ft_path = os.path.join(base_name, ft_dir, feat)
-    train_dataset = StrokeFeaturePairsDataset(ft_path, train_lst, DATASET, LABELS, CLASS_IDS, 
-                                         frames_per_clip=SEQ_SIZE, extracted_frames_per_clip=2,
-                                         step_between_clips=STEP, train=True)
-    ft_path_val = os.path.join(base_name, ft_dir, feat_val)
-    val_dataset = StrokeFeaturePairsDataset(ft_path_val, val_lst, DATASET, LABELS, CLASS_IDS, 
-                                         frames_per_clip=SEQ_SIZE, extracted_frames_per_clip=2,
-                                         step_between_clips=STEP, train=False)
+                                        #videotransforms.RandomHorizontalFlip(),\
+                                        ])
+    train_dataset = CricketStrokesDataset(train_lst, DATASET, LABELS, CLASS_IDS, 
+                                         frames_per_clip=SEQ_SIZE, step_between_clips=STEP, 
+                                         train=True, framewiseTransform=False, 
+                                         transform=clip_transform)
+    val_dataset = CricketStrokesDataset(val_lst, DATASET, LABELS, CLASS_IDS, 
+                                        frames_per_clip=SEQ_SIZE, step_between_clips=STEP, 
+                                        train=False, framewiseTransform=False, 
+                                        transform=clip_transform)
     
     train_loader = DataLoader(dataset=train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     
@@ -279,10 +291,8 @@ def train_attn_model(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE,
     ###########################################################################    
     # load model and set loss function    
     
-    encoder = attn_model.Encoder(INPUT_SIZE, HIDDEN_SIZE, 1, bidirectional)
-    decoder = attn_model.AttentionDecoder(HIDDEN_SIZE*(1+bidirectional), TARGET_SIZE, 
-                               max_length=SEQ_SIZE-2+1)
-#    model = attn_model.AttentionEncoderDecoder(INPUT_SIZE, HIDDEN_SIZE, TARGET_SIZE, SEQ_SIZE-16+1)
+    encoder = conv_attn_model.Conv3DEncoder(HIDDEN_SIZE, 1, bidirectional)
+    decoder = conv_attn_model.Conv3DDecoder(HIDDEN_SIZE, HIDDEN_SIZE, 1, 196, bidirectional)
 #    model = attn_model.Encoder(10, 20, bidirectional)
     
 #    for ft in model.parameters():
@@ -332,20 +342,22 @@ def train_attn_model(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE,
         
     end = time.time()
     
-    # save the best performing model
-    attn_utils.save_attn_model_checkpoint(base_name, (encoder, decoder), N_EPOCHS, "Adam")
-    # Load model checkpoints
-    encoder, decoder = attn_utils.load_attn_model_checkpoint(base_name, encoder, decoder, N_EPOCHS, "Adam")
+#    # save the best performing model
+#    attn_utils.save_attn_model_checkpoint(base_name, (encoder, decoder), N_EPOCHS, "Adam")
+#    # Load model checkpoints
+#    encoder, decoder = attn_utils.load_attn_model_checkpoint(base_name, encoder, decoder, N_EPOCHS, "Adam")
     
     print("Total Execution time for {} epoch : {}".format(N_EPOCHS, (end-start)))
 
 #    ###########################################################################    
     
-    features_val, stroke_names_id_val = attn_utils.read_feats(os.path.join(base_name, ft_dir), 
-                                                              feat_val, snames_val)
-    
-    predict(features_val, stroke_names_id_val, encoder, decoder, data_loaders,
-            labs_keys, labs_values, phase='test')
+#    features_val, stroke_names_id_val = attn_utils.read_feats(os.path.join(base_name, ft_dir), 
+#                                                              feat_val, snames_val)
+#    
+#    predict(features_val, stroke_names_id_val, encoder, decoder, data_loaders,
+#            labs_keys, labs_values, phase='test')
+    print("#Parameters Encoder : {} ".format(autoenc_utils.count_parameters(encoder)))
+    print("#Parameters Decoder : {} ".format(autoenc_utils.count_parameters(decoder)))
     
     return None, None
         
@@ -357,16 +369,15 @@ if __name__ == '__main__':
     CLASS_IDS = "/home/arpan/VisionWorkspace/Cricket/cluster_strokes/configs/Class Index_Strokes.txt"    
     ANNOTATION_FILE = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/shots_classes.txt"
 
-    SEQ_SIZE = 6
-    STEP = 5
+    SEQ_SIZE = 8
+    STEP = 1
     NUM_LAYERS = 2
-    BATCH_SIZE = 32
+    BATCH_SIZE = 16
     N_EPOCHS = 30
     
-    trajectories, stroke_names = train_attn_model(DATASET, LABELS, CLASS_IDS, 
-                                                BATCH_SIZE, ANNOTATION_FILE,
-                                                SEQ_SIZE, STEP, nstrokes=-1, 
-                                                N_EPOCHS=N_EPOCHS, base_name=base_path)
+    trajectories, stroke_names = main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, 
+                                      ANNOTATION_FILE, SEQ_SIZE, STEP, nstrokes=-1, 
+                                      N_EPOCHS=N_EPOCHS, base_name=base_path)
 
 
 

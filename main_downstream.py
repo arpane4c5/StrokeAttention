@@ -39,6 +39,7 @@ import time
 import csv
 import pickle
 import attn_model
+import attn_utils
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 base_path = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs"
@@ -47,41 +48,8 @@ feat, feat_val = "of_feats_grid20.pkl", "of_feats_val_grid20.pkl"
 snames, snames_val = "of_snames_grid20.pkl", "of_snames_val_grid20.pkl"
 INPUT_SIZE, TARGET_SIZE = 576, 576      # OFGRID: 576, 3DCNN: 512, 2DCNN: 2048
 HIDDEN_SIZE = 256 #64#1024
+bidirectional = False
 
-
-def get_cluster_labels(cluster_labels_path):
-    labs_keys = []
-    labs_values = []
-    with open(cluster_labels_path) as csv_file:
-        csv_reader = csv.reader(csv_file, delimiter=',')
-        line_count = 0
-        for row in csv_reader:    
-            #print("{} :: Class : {}".format(row[0], row[1]))
-            labs_keys.append(row[0])
-            labs_values.append(int(row[1]))
-            line_count += 1
-        print("Read {} ground truth stroke labels from file.".format(line_count))
-        
-    if min(labs_values) == 1:
-        labs_values = [l-1 for l in labs_values]
-        labs_keys = [k.replace('.avi', '') for k in labs_keys]
-    return labs_keys, labs_values
-
-def get_batch_labels(vid_path, stroke, labs_keys, labs_values):
-    
-    labels = []
-    for i, vid_name in enumerate(vid_path):
-        
-        vid_name = vid_name.rsplit('/', 1)[1]
-        if '.avi' in vid_name:
-            vid_name = vid_name.replace('.avi', '')
-        elif '.mp4' in vid_name:
-            vid_name = vid_name.replace('.mp4', '')
-        stroke_name = vid_name+"_"+str(stroke[0][i].item())+"_"+str(stroke[1][i].item())
-        assert stroke_name in labs_keys, "Key does not match : {}".format(stroke_name)
-        labels.append(labs_values[labs_keys.index(stroke_name)])
-        
-    return torch.tensor(labels)
         
 def save_model_checkpoint(base_name, model, ep, opt):
     """
@@ -107,13 +75,6 @@ def load_weights(base_name, model, ep, opt):
         model.decoder.load_state_dict(torch.load(dec_name))
         print("Loading Decoder weights... : {}".format(dec_name))
     return model
-    
-def read_feats(base_name, feat, snames):
-    with open(os.path.join(base_name, feat), "rb") as fp:
-        features = pickle.load(fp)
-    with open(os.path.join(base_name, snames), "rb") as fp:
-        strokes_name_id = pickle.load(fp)
-    return features, strokes_name_id
 
 
 def train_model(features, stroke_names_id, model, dataloaders, criterion, 
@@ -140,7 +101,7 @@ def train_model(features, stroke_names_id, model, dataloaders, criterion,
             # Iterate over data.
             for bno, (inputs, _, vid_path, stroke, labels) in enumerate(dataloaders[phase]):
                 # inputs of shape BATCH x SEQ_LEN x FEATURE_DIM
-                labels = get_batch_labels(vid_path, stroke, labs_keys, labs_values)
+                labels = attn_utils.get_batch_labels(vid_path, stroke, labs_keys, labs_values)
                 # Extract spatio-temporal features from clip using 3D ResNet (For SL >= 16)
 #                inputs = inputs.permute(0, 2, 1, 3, 4).float()                
                 inputs = inputs.to(device)
@@ -219,15 +180,12 @@ def predict(features, stroke_names_id, encoder, decoder, dataloaders, labs_keys,
     # Iterate over data.
     for bno, (inputs, targets, vid_path, stroke, labels) in enumerate(dataloaders[phase]):
         # inputs of shape BATCH x SEQ_LEN x FEATURE_DIM
-        labels = get_batch_labels(vid_path, stroke, labs_keys, labs_values)
+        labels = attn_utils.get_batch_labels(vid_path, stroke, labs_keys, labs_values)
         # Extract spatio-temporal features from clip using 3D ResNet (For SL >= 16)
 #                inputs = inputs.permute(0, 2, 1, 3, 4).float()
         
         inputs, targets = inputs.to(device), targets.to(device)
         labels = labels.to(device)
-
-        loss = 0
-
         # forward
         # track history if only in train
         with torch.set_grad_enabled(phase == 'train'):
@@ -334,15 +292,13 @@ def train_attn_model(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE,
 
     ###########################################################################
     
-    labs_keys, labs_values = get_cluster_labels(ANNOTATION_FILE)
+    labs_keys, labs_values = attn_utils.get_cluster_labels(ANNOTATION_FILE)
     
     num_classes = len(list(set(labs_values)))
     
     ###########################################################################    
     
-    # load model and set loss function
-    bidirectional = False
-    
+    # load model and set loss function    
     model = attn_model.AttentionEncoderDecoderClassifier(INPUT_SIZE, HIDDEN_SIZE, 
                                                          TARGET_SIZE, SEQ_SIZE-2+1)
     
@@ -382,7 +338,7 @@ def train_attn_model(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE,
 #    # Observe that all parameters are being optimized
 #    optimizer_ft = optim.SGD(params_to_update, lr=0.001, momentum=0.9)
     
-    features, stroke_names_id = read_feats(os.path.join(base_name, ft_dir), feat, snames)
+    features, stroke_names_id = attn_utils.read_feats(os.path.join(base_name, ft_dir), feat, snames)
     
     ###########################################################################
     # Training the model    
@@ -403,14 +359,13 @@ def train_attn_model(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE,
 
 #    ###########################################################################
     
-    features_val, stroke_names_id_val = read_feats(os.path.join(base_name, ft_dir), 
+    features_val, stroke_names_id_val = attn_utils.read_feats(os.path.join(base_name, ft_dir), 
                                                    feat_val, snames_val)
     
     predict(features_val, stroke_names_id_val, model, data_loaders, labs_keys, 
             labs_values, phase='test')
     
     return None, None
-
 
 if __name__ == '__main__':
     # Local Paths
@@ -424,7 +379,6 @@ if __name__ == '__main__':
     NUM_LAYERS = 2
     BATCH_SIZE = 32
     N_EPOCHS = 25
-    base_path = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs"
     
     trajectories, stroke_names = train_attn_model(DATASET, LABELS, CLASS_IDS, 
                                                 BATCH_SIZE, ANNOTATION_FILE,
