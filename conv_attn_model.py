@@ -311,6 +311,71 @@ class Conv3DDecoder(nn.Module):
         
         return h, attn_wts_lst
 
+    def _init_hidden(self, batch_size):
+         #* self.n_directions
+        hidden = torch.zeros(self.n_layers * self.n_directions, batch_size, \
+                             self.hidden_size)
+        return hidden.to(device)
+    
+    
+class Conv3DDecoderClassifier(nn.Module):
+    """
+    The convTranspose3D Layers defined for clips. No unpooling in temporal dimension. 
+    Spatial unpooling applied upto some extent.
+    GRU layer at the end.
+    """
+
+    def __init__(self, hidden_size, output_size, n_layers, max_length=196, 
+                 bidirectional=False):
+        super(Conv3DDecoderClassifier, self).__init__()
+        
+        self.hidden_size = hidden_size      # 2048 after conv6
+        self.n_layers = n_layers
+        self.n_directions = int(bidirectional) + 1
+        self.output_size = output_size
+        self.max_length = max_length
+        self.dropout_p = 0.5
+        
+#        self.gru = nn.GRU(8192, self.hidden_size, n_layers, batch_first=True,
+#                          bidirectional=bidirectional)
+        self.attn_dec = AttentionDecoder(self.hidden_size, self.hidden_size, self.n_layers, 
+                                         bidirectional, self.max_length)
+
+        self.fc = nn.Linear(self.hidden_size, output_size)
+
+#        self.dropout = nn.Dropout(p=0.5)
+
+        self.relu = nn.ReLU()
+        if torch.__version__.split('.')[0]=='1':
+            self.softmax = nn.Softmax(dim = 1)
+        else:
+            self.softmax = nn.Softmax()     # PyTorch 0.2 Operates on 2D arrays
+
+    def forward(self, dec_h, enc_outputs):
+        
+        dec_out_lst, attn_wts_lst = [], []
+#        for ti in range(enc_outputs.size(1)):
+            #start symbol of dim  (batch x output_size) 
+        inp = torch.zeros((dec_h.size(1), self.hidden_size)).to(device)  #starting symbol
+        # dec_out : (B, 128), dec_h: (1, B, 128), attn_wts: (B, 196)
+        dec_out, dec_h, attn_wts = self.attn_dec(dec_h, enc_outputs, inp)
+        dec_out_lst.append(dec_out)
+#        attn_wts_lst.append(attn_wts)
+            # for ti ends
+        out = self.softmax(self.fc(dec_h.squeeze(0)))
+#        # reconstruct the output
+#        dec_outputs = torch.stack(dec_out_lst, dim=1)
+#        batch, seq, ftsize = dec_outputs.size()
+#        ht = int(math.sqrt(seq))
+#        dec_outputs = dec_outputs.reshape(batch, ht, ht, ftsize).permute(0, 3, 1, 2)  # shift C to dim1
+#        dec_outputs = dec_outputs.unsqueeze(2)
+#        h = self.relu(self.deconv3(dec_outputs))
+#        h = self.relu(self.deconv2(h))
+##        h = self.pool1(h)
+#        h = torch.sigmoid(self.deconv1(h))
+##        h = self.pool2(h)
+        
+        return out, attn_wts
     
     def _init_hidden(self, batch_size):
          #* self.n_directions

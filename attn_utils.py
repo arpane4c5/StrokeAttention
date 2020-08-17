@@ -14,6 +14,8 @@ import numpy as np
 import os
 import pickle
 import random
+from datasets.dataset import CricketStrokesDataset
+
 
 def seed_everything(seed=1234):
 #    random.seed(seed)
@@ -181,7 +183,10 @@ def get_sample_weights(train_dataset, labs_keys, labs_values, train_lst):
     train_set_keys = []
     # count the number of samples for each class
     for i in range(train_dataset.__len__()):
-        seq, vpath, stroke, _ = train_dataset.__getitem__(i)
+        if isinstance(train_dataset, CricketStrokesDataset):
+            _, vpath, stroke, *_ = train_dataset.video_clips.get_clip(i)
+        else:
+            seq, vpath, stroke, _ = train_dataset.__getitem__(i)
         key = vpath.rsplit('/', 1)[1].rsplit('.', 1)[0]+'_'+\
                 str(stroke[0])+'_'+str(stroke[1])
         label = labs_values[labs_keys.index(key)]
