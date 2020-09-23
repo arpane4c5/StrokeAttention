@@ -14,6 +14,7 @@ import pickle
 import os
 from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
+from sklearn.linear_model import OrthogonalMatchingPursuit
 from sklearn.preprocessing import normalize
 import cv2
 
@@ -118,10 +119,10 @@ def make_codebook(vecs, nclusters, model_type="kmeans"):
     return model
 
 
-def create_bovw_onehot(features, strokes_name_id, model, base="", partition='train'):
+def create_bovw_onehot(features, strokes_name_id, model):
     '''
-    Form a features dataframe of C3D FC7/HOOF features kept in feats_data_dict. 
-    Returns one dataframe of (nTrimmedVids, nClusters). 
+    Form one hot vector representations for  OF / HOOF / C3D FC7 features.
+    Returns dictionary with {vidname : np.array((NFeats, FeatSize)), ...}.
     
     Parameters:
     ------
@@ -134,10 +135,8 @@ def create_bovw_onehot(features, strokes_name_id, model, base="", partition='tra
         
     Returns:
     ------
-    pd.Dataframe of size (nTrimmedVids, nClusters)
-    with frequency histogram of trimmed videos
-    Also return a string sequence of words with integer values representing
-    cluster centers.
+    Dictionary similar to features dictionary, but having one-hot vector 
+    representations for each video.
     
     '''
     # get the cluster centroids
@@ -146,17 +145,11 @@ def create_bovw_onehot(features, strokes_name_id, model, base="", partition='tra
     else:
         n_clusters = model.n_components
     n_strokes = len(strokes_name_id)
-    
-    # Create a dataframe of size n_videos X n_clusters
-    print("Make bow vector for each feature vector")
-#    bovw_df = np.zeros((n_strokes, n_clusters), dtype=np.float)
-    
-#    print("Shape of bovw_dataframe : {}".format(bovw_df.shape))
-    
+        
     words = {}
     row_no = 0
     # Make bow vectors for all videos.
-    for video_index, video in enumerate(strokes_name_id):
+    for video in strokes_name_id:
         # Get the starting and ending stroke frame positions        
         m, n = video.rsplit('_', 2)[1:]
         m, n = int(m), int(n)
@@ -182,5 +175,145 @@ def create_bovw_onehot(features, strokes_name_id, model, base="", partition='tra
 #            
         words[video] = stroke_onehot
         row_no +=1
+    return words
+
+
+def create_bovw_SA(features, strokes_name_id, model):
+    '''
+    Form soft assignment vector representations for OF / HOOF / C3D FC7 features.
+    Returns dictionary with {vidname : np.array((NFeats, FeatSize)), ...}.
     
+    Parameters:
+    ------
+    features: dict
+        {'video_id1':np.array((N, d)), ...}  , where d is vec dimension
+    strokes_name_id: list of str
+        key values of features, eg. video-name_34_242 
+    km_model: KMeans / GaussianMixture obj
+        Learned KMeans / GMM model with nClusters / nComponents
+        
+    Returns:
+    ------
+    Dictionary similar to features dictionary, but having soft assignment vector 
+    representations for each video.
+    
+    '''
+    # get the cluster centroids
+    if isinstance(model, KMeans):
+        n_clusters = model.n_clusters
+    else:
+        n_clusters = model.n_components
+    n_strokes = len(strokes_name_id)
+    
+    words = {}
+    row_no = 0
+    beta = -1.
+    if features[list(features.keys())[0]].shape[1] == 2304:
+        beta = -0.6     # For ofGrid10, exp operation gives large values for beta=-1
+    # Make bow vectors for all videos.
+    for video in strokes_name_id:
+        # Get the starting and ending stroke frame positions        
+        m, n = video.rsplit('_', 2)[1:]
+        m, n = int(m), int(n)
+        
+        # select the vectors of size Nx1x4096 and remove mid dimension of 1
+        stroke_feats = features[video]
+        stroke_feats[np.isnan(stroke_feats)] = 0
+        stroke_feats[np.isinf(stroke_feats)] = 0
+        # find cluster centroid assignments for all points
+        # returns a tuple, with first element having ids of the cluster centroid 
+        # to which the row i belongs to. Second element is the distance between 
+        # the nearest code and the ith row.
+        # visual_word_ids is a 1D array
+        
+        if isinstance(model, KMeans):
+            # calculate L2 dist of each row from all cluster centers
+            cl_dists = [(np.linalg.norm(model.cluster_centers_ - stroke_feats[i,:], axis=1)) \
+                        for i in range(stroke_feats.shape[0])]
+            # form nFeats x nClusters (distance of a feature from all the cluster centers)
+            cl_dists = np.vstack(cl_dists)      # unnormalized
+#            cl_dists = normalize(cl_dists**2, axis=1, norm="l2")   # accuracy decreases 
+        else:
+            cl_dists = model.predict_proba(stroke_feats)
+        
+##        omega = np.sum(cl_dists, axis=0) / np.sum(cl_dists)
+        omega = np.exp(beta * cl_dists)     # beta=1, decreasing it reduces accuracy
+        omega = omega / omega.sum(axis = 1)[:, None]    # normalize
+#        bovw_df[row_no, :] = np.sum(omega, axis=0) / omega.shape[0]
+        words[video] = omega
+        row_no +=1
+
+    return words
+
+def create_bovw_OMP(features, strokes_name_id, model):
+    '''
+    Form a features dataframe of C3D FC7/HOOF features kept in feats_data_dict. 
+    Returns one dataframe of (nTrimmedVids, nClusters). Use Soft Assignment
+    
+    Parameters:
+    ------
+    features: dict
+        {'video_id1':np.array((N, d)), ...}  , where d is vec dimension
+    strokes_name_id: list of str
+        key values of features, eg. video-name_34_242 
+    km_model: KMeans / GaussianMixture obj
+        Learned KMeans / GMM model with nClusters / nComponents
+        
+    Returns:
+    ------
+    pd.Dataframe of size (nTrimmedVids, nClusters)
+    with frequency histogram of trimmed videos
+    Also return a string sequence of words with integer values representing
+    cluster centers.
+    
+    '''
+    # get the cluster centroids
+    if isinstance(model, KMeans):
+        n_clusters = model.n_clusters
+    else:
+        n_clusters = model.n_components
+    n_strokes = len(strokes_name_id)
+    
+    words = {}
+    row_no = 0
+    omp = OrthogonalMatchingPursuit(n_nonzero_coefs=25)
+    phi = np.transpose(model.cluster_centers_)
+    phi = normalize(phi, axis=0, norm='l2')
+    #omp.fit(np.transpose(model.cluster_centers_), stroke_feats[0,:])
+
+    # Make bow vectors for all videos.
+    for video_index, video in enumerate(strokes_name_id):
+        # Get the starting and ending stroke frame positions        
+        m, n = video.rsplit('_', 2)[1:]
+        m, n = int(m), int(n)
+        
+        # select the vectors of size Nx1x4096 and remove mid dimension of 1
+        stroke_feats = features[video]
+        stroke_feats[np.isnan(stroke_feats)] = 0
+        stroke_feats[np.isinf(stroke_feats)] = 0
+        # find cluster centroid assignments for all points
+        # returns a tuple, with first element having ids of the cluster centroid 
+        # to which the row i belongs to. Second element is the distance between 
+        # the nearest code and the ith row.
+        # visual_word_ids is a 1D array
+        
+        stroke_feats = normalize(stroke_feats, axis=1, norm='l2')
+        print("row No : {}".format(row_no))
+        sparse_vecs = []
+        
+        for i in range(stroke_feats.shape[0]):
+            omp.fit(phi, stroke_feats[i,:])
+            sparse_vecs.append(omp.coef_)
+            
+        sparse_vecs = np.vstack(sparse_vecs)
+
+##        omega = np.sum(cl_dists, axis=0) / np.sum(cl_dists)
+#        omega = np.exp(-1.0 * sparse_vecs)     # beta=1, decreasing it reduces accuracy
+#        omega = omega / omega.sum(axis = 1)[:, None]    # normalize
+            
+#            
+        words[video] = sparse_vecs
+        row_no +=1
+    
+#    bovw_df = pd.DataFrame(bovw_df, index=strokes_name_id)
     return words

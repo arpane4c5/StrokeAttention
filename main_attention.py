@@ -12,7 +12,6 @@ import os
 import sys
 import numpy as np
 
-
 sys.path.insert(0, '../cluster_strokes')
 sys.path.insert(0, '../cluster_strokes/lib')
 

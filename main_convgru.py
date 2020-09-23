@@ -34,32 +34,14 @@ from datasets.dataset import CricketStrokesDataset
 import copy
 import time
 import pickle
-import conv_attn_model
+import convrnn
 import attn_utils
-#import model_c3d as c3d_pre
-import model_c3d_finetune as c3d
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 base_path = "/home/arpan/VisionWorkspace/Cricket/StrokeAttention/logs"
-pretrained_c3d_wts = '/home/arpan/VisionWorkspace/Cricket/localization_finetuneC3D/log_hl_main_seq23/c3d_finetune_conv5b_FC678_ep15_w23_SGD.pt'
-wts_path = 'c3d.pickle'
 #INPUT_SIZE, TARGET_SIZE = 576, 576      # OFGRID: 576, 3DCNN: 512, 2DCNN: 2048
 HIDDEN_SIZE = 1024 #64#1024
 bidirectional = False
-
-
-def copy_pretrained_weights(model_src, model_tar):
-    params_src = model_src.named_parameters()
-    params_tar = model_tar.named_parameters()
-    dict_params_tar = dict(params_tar)
-#    del dict_params_tar['conv5b.weight']
-#    del dict_params_tar['conv5b.bias']
-    for name_src, param_src in params_src:
-        if name_src in dict_params_tar:
-            print("Copy : {}".format(name_src))
-            dict_params_tar[name_src].data.copy_(param_src.data)
-            dict_params_tar[name_src].requires_grad = False     # Freeze layer wts
-            
 
 def train_model(model, dataloaders, criterion, optimizer, scheduler, labs_keys, 
                 labs_values, num_epochs=25):
@@ -85,8 +67,9 @@ def train_model(model, dataloaders, criterion, optimizer, scheduler, labs_keys,
             # Iterate over data.
             for bno, (inputs, vid_path, stroke, labels) in enumerate(dataloaders[phase]):
                 # inputs of shape BATCH x SEQ_LEN x FEATURE_DIM
-                labels = attn_utils.get_batch_labels(vid_path, stroke, labs_keys, labs_values, inputs.size(1))
+                labels = attn_utils.get_batch_labels(vid_path, stroke, labs_keys, labs_values, 1)
                 # Extract spatio-temporal features from clip using 3D ResNet (For SL >= 16)
+                inputs = inputs[:,::2,:,:,:]
                 inputs = inputs.permute(0, 2, 1, 3, 4).float()
                 inputs = inputs.to(device)
                 labels = labels.to(device)
@@ -98,9 +81,10 @@ def train_model(model, dataloaders, criterion, optimizer, scheduler, labs_keys,
                 # track history if only in train
                 with torch.set_grad_enabled(phase == 'train'):
                     
-                    probs = model(inputs)
-                    loss = criterion(probs, labels)
-                    _, preds = torch.max(probs, 1)
+                    output = model(inputs)
+#                    probs = model(inputs)
+                    loss = criterion(output, labels)
+                    _, preds = torch.max(output, 1)
                     
                     # backward + optimize only if in training phase
                     if phase == 'train':
@@ -114,14 +98,14 @@ def train_model(model, dataloaders, criterion, optimizer, scheduler, labs_keys,
                 running_corrects += torch.sum(preds == labels.data)
                 
 #                print("Batch No : {} / {}".format(bno, len(dataloaders[phase])))
-                if (bno+1) % 500 == 0:
+                if (bno+1) % 20 == 0:
                     break
                     
             if phase == 'train':
                 scheduler.step()
 
             epoch_loss = running_loss #/ (bno+1)    #len(dataloaders[phase].dataset)
-            epoch_acc = running_corrects.double() / (16*inputs.size(2)*(bno+1)) #len(dataloaders[phase].dataset)
+            epoch_acc = running_corrects.double() / (inputs.size(0)*1*(bno+1)) #len(dataloaders[phase].dataset)
 
             print('{} Loss: {:.4f} :: Acc: {:.4f}'.format(phase, epoch_loss, epoch_acc))
 
@@ -149,7 +133,9 @@ def predict(model, dataloaders, labs_keys, labs_values, phase="val"):
     # Iterate over data.
     for bno, (inputs, vid_path, stroke, labels) in enumerate(dataloaders[phase]):
         # inputs of shape BATCH x SEQ_LEN x FEATURE_DIM
-        labels = attn_utils.get_batch_labels(vid_path, stroke, labs_keys, labs_values, inputs.size(1))
+        labels = attn_utils.get_batch_labels(vid_path, stroke, labs_keys, labs_values, 1)
+        inputs = inputs[:,::2,:,:,:]
+
         # Extract spatio-temporal features from clip using 3D ResNet (For SL >= 16)
         inputs = inputs.permute(0, 2, 1, 3, 4).float()
         
@@ -162,7 +148,7 @@ def predict(model, dataloaders, labs_keys, labs_values, phase="val"):
             gt_list.append(labels.tolist())
             pred_list.append((torch.max(probs, 1)[1]).tolist())
             for i, vid in enumerate(vid_path):
-                stroke_ids.extend([vid+"_"+str(stroke[0][i].item())+"_"+str(stroke[1][i].item())] * inputs.size(2))
+                stroke_ids.extend([vid+"_"+str(stroke[0][i].item())+"_"+str(stroke[1][i].item())] * 1)
         # statistics
 #        running_loss += loss.item()
 #                print("Iter : {} :: Running Loss : {}".format(bno, running_loss))
@@ -173,7 +159,7 @@ def predict(model, dataloaders, labs_keys, labs_values, phase="val"):
 #            break
 #    epoch_loss = running_loss #/ len(dataloaders[phase].dataset)
 #            epoch_acc = running_corrects.double() / len(dataloaders[phase].dataset)
-    confusion_mat = np.zeros((model.output_size, model.output_size))
+    confusion_mat = np.zeros((5, 5))
     gt_list = [g for batch_list in gt_list for g in batch_list]
     pred_list = [p for batch_list in pred_list for p in batch_list]
     prev_gt = stroke_ids[0]
@@ -232,8 +218,6 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     trajectories, stroke_names
     
     '''
-    seed = 1234
-    attn_utils.seed_everything(seed)
     ###########################################################################
     # Read the strokes 
     # Divide the highlight dataset files into training, validation and test sets
@@ -245,7 +229,7 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     # Clip level transform. Use this with framewiseTransform flag turned off
     clip_transform = transforms.Compose([videotransforms.CenterCrop(300),
                                          videotransforms.ToPILClip(), 
-                                         videotransforms.Resize((112, 112)),
+                                         videotransforms.Resize((32, 32)),
 #                                         videotransforms.RandomCrop(112), 
                                          videotransforms.ToTensor(), 
                                          videotransforms.Normalize(),
@@ -283,14 +267,16 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     data_loaders = {"train": train_loader, "test": val_loader}
     
     ###########################################################################    
-    # load model and set loss function    
-    model = conv_attn_model.C3DGRUv2Orig(HIDDEN_SIZE, 1, num_classes, bidirectional)
-    model_pretrained = c3d.C3D()
-    model_pretrained.load_state_dict(torch.load("../localization_rnn/"+wts_path))
-#    model_pretrained = c3d_pre.C3D()
-#    model_pretrained.fc8 = nn.Linear(4096, 2)
-#    model_pretrained.load_state_dict(torch.load(pretrained_c3d_wts))
-    copy_pretrained_weights(model_pretrained, model)
+    # load model and set loss function
+#    model = convrnn.ConvGRU(input_size=3, hidden_size=20, kernel_size=3, num_layers=1)
+    model = convrnn.ConvLSTM(input_channels=3, hidden_channels=[128, 64, 64, 32, 32], kernel_size=3, step=5,
+                        effective_step=[4])
+#    model_pretrained = c3d.C3D()
+#    model_pretrained.load_state_dict(torch.load("../localization_rnn/"+wts_path))
+##    model_pretrained = c3d_pre.C3D()
+##    model_pretrained.fc8 = nn.Linear(4096, 2)
+##    model_pretrained.load_state_dict(torch.load(pretrained_c3d_wts))
+#    copy_pretrained_weights(model_pretrained, model)
     
 #    for ft in model.parameters():
 #        ft.requires_grad = False
@@ -312,10 +298,10 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     
     # Observe that all parameters are being optimized
     optimizer_ft = torch.optim.Adam(params_to_update, lr=0.001)
-#    optimizer_ft = optim.SGD(params_to_update, lr=0.001, momentum=0.9)    
+#    optimizer_ft = optim.SGD(params_to_update, lr=0.01, momentum=0.9)    
     
     # Decay LR by a factor of 0.1 every 7 epochs
-    lr_scheduler = StepLR(optimizer_ft, step_size=15, gamma=0.1)
+    lr_scheduler = StepLR(optimizer_ft, step_size=10, gamma=0.1)
         
 #    ###########################################################################
     # Training the model
@@ -327,9 +313,9 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     end = time.time()
     
     # save the best performing model
-    attn_utils.save_model_checkpoint(base_name, model, N_EPOCHS, "SGD_c3dgru")
+    attn_utils.save_model_checkpoint(base_name, model, N_EPOCHS, "ConvGRU_SGD")
     # Load model checkpoints
-    model = attn_utils.load_weights(base_name, model, N_EPOCHS, "SGD_c3dgru")
+    model = attn_utils.load_weights(base_name, model, N_EPOCHS, "ConvGRU_SGD")
     
     print("Total Execution time for {} epoch : {}".format(N_EPOCHS, (end-start)))
 
@@ -351,8 +337,8 @@ if __name__ == '__main__':
 
     SEQ_SIZE = 16
     STEP = 4
-    BATCH_SIZE = 16
-    N_EPOCHS = 30
+    BATCH_SIZE = 8
+    N_EPOCHS = 10
     
     attn_utils.seed_everything(1234)
     

@@ -5,7 +5,7 @@ Created on Sun Jul 26 23:43:52 2020
 
 @author: arpan
 
-@Description: Train an Attention model on strokes
+@Description: Train an Attention model on strokes. Problem: Test Acc at training is 0.00
 """
 
 import os
@@ -38,12 +38,13 @@ import attn_utils
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 base_path = "/home/arpan/VisionWorkspace/Cricket/StrokeAttention/logs"
-ft_dir = "bow_HL_ofAng_grid20"
-feat, feat_val = "of_feats_grid20.pkl", "of_feats_val_grid20.pkl"
-snames, snames_val = "of_snames_grid20.pkl", "of_snames_val_grid20.pkl"
+#ft_dir = "bow_HL_ofAng_grid20"
+#feat, feat_val = "of_feats_grid20.pkl", "of_feats_val_grid20.pkl"
+#snames, snames_val = "of_snames_grid20.pkl", "of_snames_val_grid20.pkl"
 #INPUT_SIZE, TARGET_SIZE = 576, 576      # OFGRID: 576, 3DCNN: 512, 2DCNN: 2048
 HIDDEN_SIZE = 128 #64#1024
 bidirectional = False
+SHIFT = 4
 
 def copy_pretrained_weights(model_src, model_tar):
     params_src = model_src.named_parameters()
@@ -55,13 +56,12 @@ def copy_pretrained_weights(model_src, model_tar):
             dict_params_tar[name_src].requires_grad = False     # Freeze layer wts
             
 
-def train_model(encoder, decoder, dataloaders, criterion, encoder_optimizer, 
-                decoder_optimizer, scheduler, labs_keys, labs_values, num_epochs=25):
+def train_model(encoder, dataloaders, criterion, encoder_optimizer, 
+                scheduler, labs_keys, labs_values, seq=8, num_epochs=25):
     since = time.time()
 
 #    best_model_wts = copy.deepcopy(model.state_dict())
     best_acc = 0.0
-
     for epoch in range(num_epochs):
         print('Epoch {}/{}'.format(epoch, num_epochs - 1))
         print('-' * 10)
@@ -70,10 +70,10 @@ def train_model(encoder, decoder, dataloaders, criterion, encoder_optimizer,
         for phase in ['train', 'test']:
             if phase == 'train':
                 encoder.train()  # Set model to training mode
-                decoder.train()
+#                decoder.train()
             else:
                 encoder.eval()   # Set model to evaluate mode
-                decoder.eval()
+#                decoder.eval()
 
             running_loss = 0.0
             running_corrects = 0
@@ -86,13 +86,13 @@ def train_model(encoder, decoder, dataloaders, criterion, encoder_optimizer,
                 inputs = inputs.permute(0, 2, 1, 3, 4).float()
                 
                 targets = inputs
-                inputs = inputs.to(device)
+#                inputs = inputs.to(device)
 #               targets = targets.to(device)
                 labels = labels.to(device)
 
                 # zero the parameter gradients
                 encoder_optimizer.zero_grad()
-                decoder_optimizer.zero_grad()
+#                decoder_optimizer.zero_grad()
                 loss = 0
 
                 # forward
@@ -100,12 +100,15 @@ def train_model(encoder, decoder, dataloaders, criterion, encoder_optimizer,
                 with torch.set_grad_enabled(phase == 'train'):
                     
                     batch_size = inputs.size(0)
-                    enc_h = encoder._init_hidden(batch_size)
-                    enc_out, h = encoder(inputs, enc_h)
-                    dec_out, attn_wts_lst = decoder(h, enc_out)
                     
-                    loss = criterion(dec_out, labels)
-                    _, preds = torch.max(dec_out, 1)
+                    for si in range(0, inputs.size(2)-seq+1, SHIFT):
+                        mod_inp = inputs[:,:,si:(si+seq)]
+                        mod_inp = mod_inp.to(device)
+                        enc_h = encoder._init_hidden(batch_size)
+                        enc_out, enc_h, attn_wts = encoder(mod_inp, enc_h)
+                        # dec_out, attn_wts_lst = decoder(h, enc_out)
+                        loss += criterion(enc_out, labels)
+                        _, preds = torch.max(enc_out, 1)
                     
 #                    dec_h = h
 #                    dec_out_lst = []
@@ -127,7 +130,7 @@ def train_model(encoder, decoder, dataloaders, criterion, encoder_optimizer,
                     if phase == 'train':
                         loss.backward()
                         encoder_optimizer.step()
-                        decoder_optimizer.step()
+#                        decoder_optimizer.step()
 
                 # statistics
                 running_loss += loss.item()
@@ -161,7 +164,7 @@ def train_model(encoder, decoder, dataloaders, criterion, encoder_optimizer,
 
 #    # load best model weights
 #    model.load_state_dict(best_model_wts)
-    return encoder, decoder
+    return encoder  #, decoder
 
 
 
@@ -270,7 +273,7 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
                                          videotransforms.Resize((112, 112)),
 #                                         videotransforms.RandomCrop(112), 
                                          videotransforms.ToTensor(), 
-#                                         videotransforms.Normalize(),
+                                         videotransforms.Normalize(),
                                         #videotransforms.RandomHorizontalFlip(),\
                                         ])
     train_dataset = CricketStrokesDataset(train_lst, DATASET, LABELS, CLASS_IDS, 
@@ -296,8 +299,9 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     
     ###########################################################################    
     # load model and set loss function    
-    encoder = conv_attn_model.Conv3DEncoder(HIDDEN_SIZE, 1, bidirectional)
-    decoder = conv_attn_model.Conv3DDecoderClassifier(HIDDEN_SIZE, 5, 1, 196, bidirectional)
+    encoder = conv_attn_model.Conv3DAttention(HIDDEN_SIZE, num_classes, 1, 196, bidirectional)
+#    encoder = conv_attn_model.Conv3DEncoder(HIDDEN_SIZE, 1, bidirectional)
+#    decoder = conv_attn_model.Conv3DDecoderClassifier(HIDDEN_SIZE, 5, 1, 196, bidirectional)
 #    decoder = conv_attn_model.Conv3DDecoder(HIDDEN_SIZE, HIDDEN_SIZE, 1, 196, bidirectional)
 #    model = attn_model.Encoder(10, 20, bidirectional)
     
@@ -306,8 +310,8 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
 #    inp_feat_size = model.fc.in_features
 #    model.fc = nn.Linear(inp_feat_size, num_classes)
 #    model = model.to(device)
-    encoder, decoder = encoder.to(device), decoder.to(device)
-    
+    encoder = encoder.to(device)
+#    decoder = decoder.to(device)
 #    # load checkpoint:
     
     # Setup the loss fxn
@@ -321,15 +325,15 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
         if param.requires_grad == True:
             params_to_update.append(param)
             print("Encoder : {}".format(name))
-    for name, param in decoder.named_parameters():
-        if param.requires_grad == True:
-            params_to_update.append(param)
-            print("Decoder : {}".format(name))
+#    for name, param in decoder.named_parameters():
+#        if param.requires_grad == True:
+#            params_to_update.append(param)
+#            print("Decoder : {}".format(name))
     
     # Observe that all parameters are being optimized
 #    optimizer_ft = torch.optim.Adam(params_to_update, lr=0.001)
     encoder_optimizer = torch.optim.SGD(encoder.parameters(), lr=0.01, momentum=0.9)
-    decoder_optimizer = torch.optim.SGD(decoder.parameters(), lr=0.01, momentum=0.9)
+#    decoder_optimizer = torch.optim.SGD(decoder.parameters(), lr=0.01, momentum=0.9)
     
     # Decay LR by a factor of 0.1 every 7 epochs
     lr_scheduler = StepLR(encoder_optimizer, step_size=10, gamma=0.1)
@@ -344,31 +348,34 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
 #    (encoder, decoder) = train_model(encoder, decoder, data_loaders, criterion, 
 #                           encoder_optimizer, decoder_optimizer, lr_scheduler, labs_keys, labs_values,
 #                           num_epochs=N_EPOCHS)
+    encoder = train_model(encoder, data_loaders, criterion, encoder_optimizer,
+                                    lr_scheduler, labs_keys, labs_values, seq=8,
+                                    num_epochs=N_EPOCHS)
         
     end = time.time()
     
     # save the best performing model
 #    attn_utils.save_attn_model_checkpoint(base_name, (encoder, decoder), N_EPOCHS, "SGD")
     # Load model checkpoints
-    encoder, decoder = attn_utils.load_attn_model_checkpoint(base_name, encoder, decoder, N_EPOCHS, "SGD")
+#    encoder, decoder = attn_utils.load_attn_model_checkpoint(base_name, encoder, decoder, N_EPOCHS, "SGD")
     
     print("Total Execution time for {} epoch : {}".format(N_EPOCHS, (end-start)))
 
-#    ###########################################################################    
+    ###########################################################################    
     
 #    features_val, stroke_names_id_val = attn_utils.read_feats(os.path.join(base_name, ft_dir), 
 #                                                              feat_val, snames_val)
     
-#    pred_out_dict = predict(encoder, decoder, data_loaders, labs_keys, 
-#                            labs_values, phase='test')
-#    print("Writing prediction dictionary....")
-#    with open(os.path.join(base_name, "pred_dict.pkl"), "wb") as fp:
-#        pickle.dump(pred_out_dict, fp)
+    pred_out_dict = predict(encoder, decoder, data_loaders, labs_keys, 
+                            labs_values, phase='test')
+    print("Writing prediction dictionary....")
+    with open(os.path.join(base_name, "pred_dict.pkl"), "wb") as fp:
+        pickle.dump(pred_out_dict, fp)
     
     # save the output wts and related information
     
     print("#Parameters Encoder : {} ".format(autoenc_utils.count_parameters(encoder)))
-    print("#Parameters Decoder : {} ".format(autoenc_utils.count_parameters(decoder)))
+#    print("#Parameters Decoder : {} ".format(autoenc_utils.count_parameters(decoder)))
     
     
     return encoder, decoder
@@ -380,10 +387,9 @@ if __name__ == '__main__':
     CLASS_IDS = "/home/arpan/VisionWorkspace/Cricket/cluster_strokes/configs/Class Index_Strokes.txt"
     ANNOTATION_FILE = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/shots_classes.txt"
 
-    SEQ_SIZE = 8
+    SEQ_SIZE = 16
     STEP = 1
-    NUM_LAYERS = 2
-    BATCH_SIZE = 64
+    BATCH_SIZE = 8
     N_EPOCHS = 3
     
     encoder, decoder =  main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, 
