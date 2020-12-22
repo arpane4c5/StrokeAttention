@@ -33,7 +33,7 @@ import attn_model
 import attn_utils
 from collections import Counter
 from create_bovw import make_codebook
-from create_bovw import create_bovw_SA
+from create_bovw import create_bovw_SA  #create_bovw_OMP   #
 from create_bovw import vis_cluster
 from sklearn.externals import joblib
 import warnings
@@ -49,10 +49,10 @@ from extract_hoof_feats import extract_stroke_feats
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # "of_feats_grid20.pkl", "of_feats_val_grid20.pkl" ; "hoof_feats_b20.pkl"
 # "2dcnn_feats_train.pkl" ; "3dcnn_feats_train.pkl" ; "hoof_feats_val_b20.pkl"
-feat, feat_val = "of_feats_grid20.pkl", "of_feats_test_grid20.pkl"
+feat, feat_val, feat_test = "of_feats_grid20.pkl","of_feats_val_grid20.pkl", "of_feats_test_grid20.pkl"
 # "of_snames_grid20.pkl" ; "2dcnn_snames_train.pkl" ; "3dcnn_snames_train.pkl";
 # "hoof_snames_b20.pkl"
-snames, snames_val = "of_snames_grid20.pkl", "of_snames_test_grid20.pkl"
+snames, snames_val, snames_test = "of_snames_grid20.pkl", "of_snames_val_grid20.pkl", "of_snames_test_grid20.pkl"
 cluster_size = 1000
 INPUT_SIZE = cluster_size      # OFGRID: 576, 3DCNN: 512, 2DCNN: 2048
 HIDDEN_SIZE = 256
@@ -60,7 +60,7 @@ N_LAYERS = 2
 bidirectional = True
 
 km_filename = "km_onehot"
-log_path = "logs/bovgru_SA_of20_Hidden256"
+log_path = "logs/bovgru_SA_of20_Hidden256_tmp"
 # bow_HL_ofAng_grid20 ; bow_HL_2dres ; bow_HL_3dres_seq16; bow_HL_hoof_b20_mth2
 feat_path = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs/bow_HL_ofAng_grid20"
 
@@ -267,6 +267,16 @@ def predict(features, stroke_names_id, model, dataloaders, labs_keys, labs_value
     print("Confusion matrix")
     print(confusion_mat)
     return (float(correct) / len(pred_labels))
+
+def normalize_feats(features, avg, std):
+    
+    for k, v in features.items():
+        v[np.isnan(v)] = 0
+        v[np.isinf(v)] = 0
+        v = (v - avg) / std
+        features[k] = v
+        
+    return features
     
 
 def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16, 
@@ -322,6 +332,10 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     vecs[np.isnan(vecs)] = 0
     vecs[np.isinf(vecs)] = 0
     
+#    avg, std = np.mean(vecs, axis=0), np.std(vecs, axis=0)
+#    vecs = (vecs - avg) / std
+#    features = normalize_feats(features, avg, std)
+    
     #fc7 layer output size (4096) 
     INP_VEC_SIZE = vecs.shape[-1]
     print("INP_VEC_SIZE = ", INP_VEC_SIZE)
@@ -343,11 +357,13 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     ft_path = os.path.join(log_path, "C"+str(cluster_size)+"_train.pkl")
     with open(ft_path, "wb") as fp:
         pickle.dump(onehot_feats, fp)
-    
+    with open(os.path.join(log_path, "C"+str(cluster_size)+"_snames_train.pkl"), "wb") as fp:
+        pickle.dump(stroke_names_id, fp)    
     ###########################################################################
     
     features_val, stroke_names_id_val = attn_utils.read_feats(feat_path, feat_val, 
                                                               snames_val)
+#    features_val = normalize_feats(features_val, avg, std)
     
     print("Create numpy one hot representation for val features...")
     onehot_feats_val = create_bovw_SA(features_val, stroke_names_id_val, km_model)
@@ -355,6 +371,20 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     ft_path_val = os.path.join(log_path, "C"+str(cluster_size)+"_val.pkl")
     with open(ft_path_val, "wb") as fp:
         pickle.dump(onehot_feats_val, fp)    
+    with open(os.path.join(log_path, "C"+str(cluster_size)+"_snames_val.pkl"), "wb") as fp:
+        pickle.dump(stroke_names_id_val, fp)    
+    ###########################################################################
+    features_test, stroke_names_id_test = attn_utils.read_feats(feat_path, feat_test, 
+                                                              snames_test)
+#    features_test = normalize_feats(features_test, avg, std)
+    print("Create numpy one hot representation for val features...")
+    onehot_feats_test = create_bovw_SA(features_test, stroke_names_id_test, km_model)
+    
+    ft_path_test = os.path.join(log_path, "C"+str(cluster_size)+"_test.pkl")
+    with open(ft_path_test, "wb") as fp:
+        pickle.dump(onehot_feats_test, fp)
+    with open(os.path.join(log_path, "C"+str(cluster_size)+"_snames_test.pkl"), "wb") as fp:
+        pickle.dump(stroke_names_id_test, fp)
     
     ###########################################################################
     # Create a Dataset    
@@ -364,7 +394,7 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
                                          frames_per_clip=SEQ_SIZE, extracted_frames_per_clip=2,
                                          step_between_clips=STEP, train=True)
 #    ft_path_val = os.path.join(base_name, ft_dir, feat_val)
-    val_dataset = StrokeFeatureSequenceDataset(ft_path_val, test_lst, DATASET, LABELS, CLASS_IDS, 
+    val_dataset = StrokeFeatureSequenceDataset(ft_path_val, val_lst, DATASET, LABELS, CLASS_IDS, 
                                          frames_per_clip=SEQ_SIZE, extracted_frames_per_clip=2,
                                          step_between_clips=STEP, train=False)
     
@@ -419,15 +449,15 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     
     start = time.time()
     
-#    model = train_model(features, stroke_names_id, model, data_loaders, criterion, 
-#                        optimizer_ft, exp_lr_scheduler, labs_keys, labs_values,
-#                        num_epochs=N_EPOCHS)
+    model = train_model(features, stroke_names_id, model, data_loaders, criterion, 
+                        optimizer_ft, exp_lr_scheduler, labs_keys, labs_values,
+                        num_epochs=N_EPOCHS)
     
     end = time.time()
     
-#    # save the best performing model
-#    attn_utils.save_model_checkpoint(log_path, model, N_EPOCHS, 
-#                                     "S"+str(SEQ_SIZE)+"C"+str(cluster_size)+"_SGD")
+    # save the best performing model
+    attn_utils.save_model_checkpoint(log_path, model, N_EPOCHS, 
+                                     "S"+str(SEQ_SIZE)+"C"+str(cluster_size)+"_SGD")
     # Load model checkpoints
     model = attn_utils.load_weights(log_path, model, N_EPOCHS, 
                                     "S"+str(SEQ_SIZE)+"C"+str(cluster_size)+"_SGD")

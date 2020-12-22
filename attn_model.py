@@ -212,9 +212,10 @@ class GRUBoWHAClassifier(nn.Module):
 #        hidden = self.dropout(self.relu(self.fc(hidden.squeeze(0))))
 #        output = self.dropout(self.relu(self.fc(output.contiguous().view(-1, self.hidden_size))))
         output = self.dropout(self.fc(output[:,-1,:]))
-        logits = self.classifier(output)
-        probs = self.softmax(logits.view(-1, self.n_classes))
-        return probs, hidden
+#        logits = self.classifier(output)
+#        probs = self.softmax(logits.view(-1, self.n_classes))
+#        return probs, hidden
+        return output, hidden
     
     def init_hidden(self, batch_size):
         enc_h = torch.zeros(self.n_directions * self.n_layers, batch_size, self.hidden_size)
@@ -247,9 +248,9 @@ class GRUBoWSAClassifier(nn.Module):
         output, hidden = self.gru1(inputs, hidden)
 #        output, hidden = self.gru2(output, hidden)
         output = self.dropout(self.fc(output[:,-1,:]))
-        logits = self.classifier(output)
-        probs = self.softmax(logits.view(-1, self.n_classes))
-        return probs, hidden
+#        logits = self.classifier(output)
+#        probs = self.softmax(logits.view(-1, self.n_classes))
+        return output, hidden
     
     def init_hidden(self, batch_size):
         enc_h = torch.zeros(self.n_directions * self.n_layers, batch_size, self.hidden_size)
@@ -292,6 +293,51 @@ class GRUClassifier(nn.Module):
         enc_h = torch.zeros(self.n_directions * self.n_layers, batch_size, self.hidden_size)
         enc_h = enc_h.to(device)
         return enc_h
+    
+class GRUBoWMultiStreamClassifier(nn.Module):
+    '''GRU model with Embedding layers for Hard Assignment (OneHot) sequences
+    '''
+    def __init__(self, input_size1, input_size2, hidden_size1, hidden_size2, n_classes, 
+                 n_layers=1, bidirectional=False):
+        super(GRUBoWMultiStreamClassifier, self).__init__()
+        
+        self.stream1_model = GRUBoWSAClassifier(input_size1, hidden_size1, n_classes, n_layers, bidirectional)
+        self.stream2_model = GRUBoWSAClassifier(input_size1, hidden_size1, n_classes, n_layers, bidirectional)
+#        self.input_size = input_size
+#        self.hidden_size = hidden_size
+        self.n_classes = n_classes
+#        self.n_directions = int(bidirectional) + 1
+#        self.n_layers = n_layers
+##        self.lstm = nn.LSTM(input_size, hidden_size, bidirectional = bidirectional)
+#        self.embedding = nn.Embedding(self.input_size, self.hidden_size)
+#        self.gru1 = nn.GRU(hidden_size, hidden_size, n_layers, batch_first=True,
+#                          bidirectional=bidirectional)
+#        self.gru2 = nn.GRU(hidden_size, hidden_size, n_layers, batch_first=True,
+#                          bidirectional=bidirectional)
+#        self.fc = nn.Linear(hidden_size * self.n_directions, hidden_size)
+        self.classifier = nn.Linear(hidden_size1 + hidden_size2, n_classes)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(p=0.5)
+        self.softmax = nn.Softmax(dim=1)
+        
+    def forward(self, inputs1, inputs2):
+#        batch_size = inputs1.size(0)
+        hidden1 = self.stream1_model.init_hidden(inputs1.size(0))
+        hidden2 = self.stream2_model.init_hidden(inputs2.size(0))
+#        emb = self.embedding(inputs1)
+#        output, hidden = self.gru1(emb, hidden)
+        out1, hidden1 = self.stream1_model(inputs1, hidden1)
+        out2, hidden2 = self.stream2_model(inputs2, hidden2)
+        out1 = self.relu(out1)
+        out2 = self.relu(out2)
+#        hidden = self.dropout(self.relu(self.fc(hidden.squeeze(0))))
+#        output = self.dropout(self.relu(self.fc(output.contiguous().view(-1, self.hidden_size))))
+#        output = self.dropout(self.fc(output[:,-1,:]))
+        logits = self.classifier(torch.cat((out1, out2), dim=1))
+        probs = self.softmax(logits.view(-1, self.n_classes))
+        return probs #, hidden
+#        return out1, out2
+
 
 if __name__ == '__main__':
     bidirectional = False
@@ -349,3 +395,82 @@ if __name__ == '__main__':
 #
 #    def initHidden(self):
 #        return torch.zeros(1, 1, self.hidden_size)
+    
+    
+###############################################################################
+###############################################################################
+
+#class GRUBoWHAClassifier(nn.Module):
+#    '''GRU model with Embedding layers for Hard Assignment (OneHot) sequences
+#    '''
+#    def __init__(self, input_size, hidden_size, n_classes, n_layers=1, 
+#                 bidirectional=False):
+#        super(GRUBoWHAClassifier, self).__init__()
+#        self.input_size = input_size
+#        self.hidden_size = hidden_size
+#        self.n_classes = n_classes
+#        self.n_directions = int(bidirectional) + 1
+#        self.n_layers = n_layers
+##        self.lstm = nn.LSTM(input_size, hidden_size, bidirectional = bidirectional)
+#        self.embedding = nn.Embedding(self.input_size, self.hidden_size)
+#        self.gru1 = nn.GRU(hidden_size, hidden_size, n_layers, batch_first=True,
+#                          bidirectional=bidirectional)
+##        self.gru2 = nn.GRU(hidden_size, hidden_size, n_layers, batch_first=True,
+##                          bidirectional=bidirectional)
+#        self.fc = nn.Linear(hidden_size * self.n_directions, hidden_size)
+#        self.classifier = nn.Linear(hidden_size, n_classes)
+#        self.relu = nn.ReLU()
+#        self.dropout = nn.Dropout(p=0.5)
+#        self.softmax = nn.Softmax(dim=1)
+#        
+#    def forward(self, inputs, hidden):
+#        batch_size = inputs.size(0)
+#        emb = self.embedding(inputs)
+#        output, hidden = self.gru1(emb, hidden)
+##        output, hidden = self.gru2(output, hidden)
+##        hidden = self.dropout(self.relu(self.fc(hidden.squeeze(0))))
+##        output = self.dropout(self.relu(self.fc(output.contiguous().view(-1, self.hidden_size))))
+#        output = self.dropout(self.fc(output[:,-1,:]))
+#        logits = self.classifier(output)
+#        probs = self.softmax(logits.view(-1, self.n_classes))
+#        return probs, hidden
+#    
+#    def init_hidden(self, batch_size):
+#        enc_h = torch.zeros(self.n_directions * self.n_layers, batch_size, self.hidden_size)
+#        enc_h = enc_h.to(device)
+#        return enc_h
+#    
+#class GRUBoWSAClassifier(nn.Module):
+#    '''For Soft Assignment sequences
+#    '''
+#    def __init__(self, input_size, hidden_size, n_classes, n_layers=1, 
+#                 bidirectional=False):
+#        super(GRUBoWSAClassifier, self).__init__()
+#        self.input_size = input_size
+#        self.hidden_size = hidden_size
+#        self.n_classes = n_classes
+#        self.n_directions = int(bidirectional) + 1
+#        self.n_layers = n_layers
+#        self.gru1 = nn.GRU(input_size, hidden_size, n_layers, batch_first=True,
+#                          bidirectional=bidirectional)
+##        self.gru2 = nn.GRU(hidden_size, hidden_size, n_layers, batch_first=True,
+##                          bidirectional=bidirectional)
+#        self.fc = nn.Linear(hidden_size * self.n_directions, hidden_size)
+#        self.classifier = nn.Linear(hidden_size, n_classes)
+#        self.relu = nn.ReLU()
+#        self.dropout = nn.Dropout(p=0.5)
+#        self.softmax = nn.Softmax(dim=1)
+#        
+#    def forward(self, inputs, hidden):
+#        batch_size = inputs.size(0)
+#        output, hidden = self.gru1(inputs, hidden)
+##        output, hidden = self.gru2(output, hidden)
+#        output = self.dropout(self.fc(output[:,-1,:]))
+#        logits = self.classifier(output)
+#        probs = self.softmax(logits.view(-1, self.n_classes))
+#        return probs, hidden
+#    
+#    def init_hidden(self, batch_size):
+#        enc_h = torch.zeros(self.n_directions * self.n_layers, batch_size, self.hidden_size)
+#        enc_h = enc_h.to(device)
+#        return enc_h

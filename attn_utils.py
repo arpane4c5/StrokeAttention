@@ -186,7 +186,7 @@ def get_sample_weights(train_dataset, labs_keys, labs_values, train_lst):
         if isinstance(train_dataset, CricketStrokesDataset):
             _, vpath, stroke, *_ = train_dataset.video_clips.get_clip(i)
         else:
-            seq, vpath, stroke, _ = train_dataset.__getitem__(i)
+            seq, vpath, stroke, *_ = train_dataset.__getitem__(i)
         key = vpath.rsplit('/', 1)[1].rsplit('.', 1)[0]+'_'+\
                 str(stroke[0])+'_'+str(stroke[1])
         label = labs_values[labs_keys.index(key)]

@@ -5,7 +5,7 @@ Created on Tue Aug 5 10:39:42 2020
 
 @author: arpan
 
-@Description: Training GRU model on BoV sequence classification.
+@Description: Training Multi-Stream GRU model on BoV sequence classification.
 """
 
 import os
@@ -24,7 +24,7 @@ from torch.utils.data import WeightedRandomSampler
 
 from utils import autoenc_utils
 #import datasets.videotransforms as videotransforms
-from datasets.dataset import StrokeFeatureSequenceDataset
+from datasets.dataset import StrokeFeatureSequencesDataset
 #from datasets.dataset import StrokeFeaturePairsDataset
 import copy
 import time
@@ -34,7 +34,7 @@ import attn_utils
 from collections import Counter
 from create_bovw import make_codebook
 from create_bovw import create_bovw_onehot
-from create_bovw import vis_cluster
+from create_bovw import vis_clusters
 from sklearn.externals import joblib
 import warnings
 
@@ -45,6 +45,8 @@ warnings.filterwarnings("ignore")
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 feat, feat_val = "of_feats_grid20.pkl", "of_feats_val_grid20.pkl"
 snames, snames_val = "of_snames_grid20.pkl", "of_snames_val_grid20.pkl"
+feat2, feat_val2 = "2dcnn_feats_train.pkl", "2dcnn_feats_val.pkl" # "hoof_feats_b20.pkl", "hoof_feats_val_b20.pkl"
+snames2, snames_val2 = "2dcnn_snames_train.pkl", "2dcnn_snames_val.pkl" #"hoof_snames_b20.pkl", "hoof_snames_val_b20.pkl"
 cluster_size = 1000
 INPUT_SIZE = cluster_size      # OFGRID: 576, 3DCNN: 512, 2DCNN: 2048
 HIDDEN_SIZE = 256
@@ -52,26 +54,9 @@ N_LAYERS = 2
 bidirectional = True
 
 km_filename = "km_onehot"
-log_path = "logs/bovgru_HA_of20_Hidden256_temp"
+log_path = "logs/bovgru_2stream"
 feat_path = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs/bow_HL_ofAng_grid20"
-
-#HIST_DIFFS = "/home/arpan/VisionWorkspace/Cricket/localization_gru/hist_diff_highlights_gray"
-#SBD_MODEL = "/home/arpan/VisionWorkspace/Cricket/scripts/supporting_files/sbd_model_RF_histDiffs_gray.pkl"
-
-def read_boundaries(vkeys, hist_diffs_path, sbd_model):
-    # load the model
-    model = joblib.load(sbd_model)
-    boundaries = {}
-    for k in vkeys:
-        vidfile = k.rsplit('/', 1)[1]
-        feature_file = os.path.join(hist_diffs_path, vidfile.rsplit('.', 1)[0]+'.npy')
-        vfeat = np.load(feature_file)       # load feature
-        vpreds = model.predict(vfeat)       # make prediction
-        idx_preds = np.argwhere(vpreds)     # get indices where 1
-        # convert to list of indices where +ve predictions
-        vid_boundaries = idx_preds.reshape(idx_preds.shape[0]).tolist()
-        boundaries[vidfile] = vid_boundaries
-    return boundaries
+feat_path2 = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs/bow_HL_2dres"  #bow_HL_hoof_b20_mth2"
 
 
 def train_model(features, stroke_names_id, model, dataloaders, criterion, 
@@ -98,14 +83,14 @@ def train_model(features, stroke_names_id, model, dataloaders, criterion,
             count = [0.] * 5
 
             # Iterate over data.
-            for bno, (inputs, vid_path, stroke, labels) in enumerate(dataloaders[phase]):
+            for bno, (inputs1, vid_path, stroke, labels, inputs2) in enumerate(dataloaders[phase]):
                 # inputs of shape BATCH x SEQ_LEN x FEATURE_DIM
                 labels = attn_utils.get_batch_labels(vid_path, stroke, labs_keys, labs_values, 1)
-                # Extract spatio-temporal features from clip using 3D ResNet (For SL >= 16)
-                inp_emb = attn_utils.get_long_tensor(inputs)
-#                inputs = inputs.float()
-                inputs = inp_emb.to(device)
-                inputs = inputs.to(device)
+#                # Extract spatio-temporal features from clip using 3D ResNet (For SL >= 16)
+#                inp_emb1, inp_emb2 = attn_utils.get_long_tensor(inputs1), attn_utils.get_long_tensor(inputs2)
+                inputs1,inputs2 = inputs1.float(), inputs2.float()
+#                inputs1, input2 = inp_emb1.to(device), inp_emb2.to(device)
+                inputs1, inputs2 = inputs1.to(device), inputs2.to(device)
                 labels = labels.to(device)
                 iter_counts = Counter(labels.tolist())
                 for k,v in iter_counts.items():
@@ -116,9 +101,8 @@ def train_model(features, stroke_names_id, model, dataloaders, criterion,
                 # forward
                 # track history if only in train
                 with torch.set_grad_enabled(phase == 'train'):
-                    hidden = model.init_hidden(inputs.size(0))
-                    
-                    outputs, hidden = model(inputs, hidden)
+#                    hidden = model.init_hidden(inputs.size(0))
+                    outputs = model(inputs1, inputs2)
                     _, preds = torch.max(outputs, 1)
                     loss = criterion(outputs, labels)     #torch.flip(targets, [1])
 
@@ -128,12 +112,13 @@ def train_model(features, stroke_names_id, model, dataloaders, criterion,
                         optimizer.step()
 
                 # statistics
-                running_loss += loss.item() * inputs.size(0)
+                running_loss += loss.item() * inputs1.size(0)
 #                print("Iter : {} :: Running Loss : {}".format(bno, running_loss))
                 running_corrects += torch.sum(preds == labels.data)
-                                    
+                
             if phase == 'train':
                 scheduler.step()
+                print("Category Weights : {}".format(count))
 
             epoch_loss = running_loss / len(dataloaders[phase].dataset)
             epoch_acc = running_corrects.double() / len(dataloaders[phase].dataset)
@@ -161,33 +146,38 @@ def predict(features, stroke_names_id, model, dataloaders, labs_keys, labs_value
     model = model.eval()
     gt_list, pred_list, stroke_ids  = [], [], []
     # Iterate over data.
-    for bno, (inputs, vid_path, stroke, labels) in enumerate(dataloaders[phase]):
+    for bno, (inputs1, vid_path, stroke, labels, inputs2) in enumerate(dataloaders[phase]):
         # inputs of shape BATCH x SEQ_LEN x FEATURE_DIM
         labels = attn_utils.get_batch_labels(vid_path, stroke, labs_keys, labs_values, 1)
-        inputs = inputs.float()
-        inp_emb = attn_utils.get_long_tensor(inputs)
-        inputs = inp_emb.to(device)
-#        inputs = inputs.to(device)
+#        inp_emb1, inp_emb2 = attn_utils.get_long_tensor(inputs1), attn_utils.get_long_tensor(inputs2)
+        inputs1,inputs2 = inputs1.float(), inputs2.float()
+#        inputs1, inputs2 = inp_emb1.to(device), inp_emb2.to(device)
+        inputs1, inputs2 = inputs1.to(device), inputs2.to(device)
         labels = labels.to(device)
-        if bno==0:
-            hidden = model.init_hidden(1)
-            prev_stroke = vid_path[0]+'_'+str(stroke[0][0].item())+'_'+str(stroke[1][0].item())
         # forward
         with torch.set_grad_enabled(phase == 'train'):
-            batch_size = inputs.size(0)
-            for si in range(batch_size):
-                curr_stroke = vid_path[si]+'_'+str(stroke[0][si].item())+'_'+str(stroke[1][si].item())
-                if prev_stroke != curr_stroke:
-                    hidden = model.init_hidden(1)
-                output, hidden = model(inputs[si].unsqueeze(0), hidden)
-                pred_list.append((torch.max(output, 1)[1]).tolist())
-                prev_stroke = curr_stroke
-#            hidden = model.init_hidden(batch_size)
-#            outputs, hidden = model(inputs, hidden)
+            outputs = model(inputs1, inputs2)
             gt_list.append(labels.tolist())
-#            pred_list.append((torch.max(outputs, 1)[1]).tolist())
+            pred_list.append((torch.max(outputs, 1)[1]).tolist())
             for i, vid in enumerate(vid_path):
                 stroke_ids.extend([vid+"_"+str(stroke[0][i].item())+"_"+str(stroke[1][i].item())] * 1)
+        
+#       # taking single hidden unit (initialized once) for entire video : accuracy lower
+#        with torch.set_grad_enabled(phase == 'train'):
+#            batch_size = inputs.size(0)
+#            for si in range(batch_size):
+#                curr_stroke = vid_path[si]+'_'+str(stroke[0][si].item())+'_'+str(stroke[1][si].item())
+#                if prev_stroke != curr_stroke:
+#                    hidden = model.init_hidden(1)
+#                output, hidden = model(inputs[si].unsqueeze(0), hidden)
+#                pred_list.append((torch.max(output, 1)[1]).tolist())
+#                prev_stroke = curr_stroke
+##            hidden = model.init_hidden(batch_size)
+##            outputs, hidden = model(inputs, hidden)
+#            gt_list.append(labels.tolist())
+##            pred_list.append((torch.max(outputs, 1)[1]).tolist())
+#            for i, vid in enumerate(vid_path):
+#                stroke_ids.extend([vid+"_"+str(stroke[0][i].item())+"_"+str(stroke[1][i].item())] * 1)
                 
 #    epoch_loss = running_loss #/ len(dataloaders[phase].dataset)
 #            epoch_acc = running_corrects.double() / len(dataloaders[phase].dataset)
@@ -286,21 +276,25 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     print("No. of training videos : {}".format(len(train_lst)))
         
     features, stroke_names_id = attn_utils.read_feats(feat_path, feat, snames)
+    features2, stroke_names_id2= attn_utils.read_feats(feat_path2, feat2, snames2)
     # get matrix of features from dictionary (N, vec_size)
-    vecs = []
+    vecs, vecs2 = [], []
     for key in sorted(list(features.keys())):
         vecs.append(features[key])
-    vecs = np.vstack(vecs)
+        vecs2.append(features2[key])
+    vecs, vecs2 = np.vstack(vecs), np.vstack(vecs2)
     
     vecs[np.isnan(vecs)] = 0
     vecs[np.isinf(vecs)] = 0
+    vecs2[np.isnan(vecs2)] = 0
+    vecs2[np.isinf(vecs2)] = 0
     
     #fc7 layer output size (4096) 
-    INP_VEC_SIZE = vecs.shape[-1]
-    print("INP_VEC_SIZE = ", INP_VEC_SIZE)
+    INP_VEC_SIZE, INP_VEC_SIZE2 = vecs.shape[-1], vecs2.shape[-1]
+    print("INP_VEC_SIZE = {} : INP_VEC_SIZE2 = {}".format(INP_VEC_SIZE, INP_VEC_SIZE2))
     
     km_filepath = os.path.join(log_path, km_filename)
-#    # Uncomment only while training.
+    # Feats1
     if not os.path.isfile(km_filepath+"_C"+str(cluster_size)+".pkl"):
         km_model = make_codebook(vecs, cluster_size)  #, model_type='gmm') 
         ##    # Save to disk, if training is performed
@@ -309,35 +303,53 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     else:
         # Load from disk, for validation and test sets.
         km_model = pickle.load(open(km_filepath+"_C"+str(cluster_size)+".pkl", 'rb'))
+    # Feats2
+    if not os.path.isfile(km_filepath+"_C"+str(cluster_size)+"_2.pkl"):
+        km_model2 = make_codebook(vecs2, cluster_size)  #, model_type='gmm') 
+        ##    # Save to disk, if training is performed
+        print("Writing the KMeans models to disk...")
+        pickle.dump(km_model2, open(km_filepath+"_C"+str(cluster_size)+"_2.pkl", "wb"))
+    else:
+        # Load from disk, for validation and test sets.
+        km_model2 = pickle.load(open(km_filepath+"_C"+str(cluster_size)+"_2.pkl", 'rb'))
         
     print("Create numpy one hot representation for train features...")
     onehot_feats = create_bovw_onehot(features, stroke_names_id, km_model)
+    print("Create numpy one hot representation for train features2...")
+    onehot_feats2 = create_bovw_onehot(features2, stroke_names_id2, km_model2)
     
     ft_path = os.path.join(log_path, "onehot_C"+str(cluster_size)+"_train.pkl")
+    ft_path2 = os.path.join(log_path, "onehot_C"+str(cluster_size)+"_train_2.pkl")
     with open(ft_path, "wb") as fp:
         pickle.dump(onehot_feats, fp)
+    with open(ft_path2, "wb") as fp:
+        pickle.dump(onehot_feats2, fp)
     
     ###########################################################################
     
     features_val, stroke_names_id_val = attn_utils.read_feats(feat_path, feat_val, 
                                                               snames_val)
-    
+    features_val2, stroke_names_id_val2 = attn_utils.read_feats(feat_path2, feat_val2, 
+                                                              snames_val2)
     print("Create numpy one hot representation for val features...")
     onehot_feats_val = create_bovw_onehot(features_val, stroke_names_id_val, km_model)
-    
+    print("Create numpy one hot representation for val features2...")
+    onehot_feats_val2 = create_bovw_onehot(features_val2, stroke_names_id_val2, km_model2)
     ft_path_val = os.path.join(log_path, "onehot_C"+str(cluster_size)+"_val.pkl")
+    ft_path_val2 = os.path.join(log_path, "onehot_C"+str(cluster_size)+"_val_2.pkl")
     with open(ft_path_val, "wb") as fp:
-        pickle.dump(onehot_feats_val, fp)    
-    
+        pickle.dump(onehot_feats_val, fp)
+    with open(ft_path_val2, "wb") as fp:
+        pickle.dump(onehot_feats_val2, fp)
     ###########################################################################
     # Create a Dataset    
 
 #    ft_path = os.path.join(base_name, ft_dir, feat)
-    train_dataset = StrokeFeatureSequenceDataset(ft_path, train_lst, DATASET, LABELS, CLASS_IDS, 
+    train_dataset = StrokeFeatureSequencesDataset(ft_path, ft_path2, train_lst, DATASET, LABELS, CLASS_IDS, 
                                          frames_per_clip=SEQ_SIZE, extracted_frames_per_clip=2,
                                          step_between_clips=STEP, train=True)
 #    ft_path_val = os.path.join(base_name, ft_dir, feat_val)
-    val_dataset = StrokeFeatureSequenceDataset(ft_path_val, val_lst, DATASET, LABELS, CLASS_IDS, 
+    val_dataset = StrokeFeatureSequencesDataset(ft_path_val, ft_path_val2, val_lst, DATASET, LABELS, CLASS_IDS, 
                                          frames_per_clip=SEQ_SIZE, extracted_frames_per_clip=2,
                                          step_between_clips=STEP, train=False)
     
@@ -357,13 +369,14 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
 
     num_classes = len(list(set(labs_values)))
     
-#    vis_cluster(onehot_feats, stroke_names_id, km_model, 3, 2, DATASET, "logs")
+    vis_clusters(features, onehot_feats, stroke_names_id, 2, DATASET, log_path)
     
     ###########################################################################    
     
     # load model and set loss function
-    model = attn_model.GRUBoWClassifier(INPUT_SIZE, HIDDEN_SIZE, num_classes, 
-                                     N_LAYERS, bidirectional)
+    model = attn_model.GRUBoWMultiStreamClassifier(INPUT_SIZE, INPUT_SIZE, HIDDEN_SIZE, 
+                                                   HIDDEN_SIZE, num_classes, N_LAYERS, 
+                                                   bidirectional)
     
 #    model = load_weights(base_name, model, N_EPOCHS, "Adam")
     
@@ -392,15 +405,15 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     
     start = time.time()
     
-#    model = train_model(features, stroke_names_id, model, data_loaders, criterion, 
-#                        optimizer_ft, exp_lr_scheduler, labs_keys, labs_values,
-#                        num_epochs=N_EPOCHS)
+    model = train_model(features, stroke_names_id, model, data_loaders, criterion, 
+                        optimizer_ft, exp_lr_scheduler, labs_keys, labs_values,
+                        num_epochs=N_EPOCHS)
     
     end = time.time()
     
     # save the best performing model
-#    attn_utils.save_model_checkpoint(log_path, model, N_EPOCHS, 
-#                                     "S"+str(SEQ_SIZE)+"C"+str(cluster_size)+"_SGD")
+    attn_utils.save_model_checkpoint(log_path, model, N_EPOCHS, 
+                                     "S"+str(SEQ_SIZE)+"C"+str(cluster_size)+"_SGD")
     # Load model checkpoints
     model = attn_utils.load_weights(log_path, model, N_EPOCHS, 
                                     "S"+str(SEQ_SIZE)+"C"+str(cluster_size)+"_SGD")
