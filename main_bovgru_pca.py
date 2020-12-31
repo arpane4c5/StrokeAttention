@@ -23,7 +23,6 @@ from torch.utils.data import DataLoader
 from torch.utils.data import WeightedRandomSampler
 
 from utils import autoenc_utils
-from utils import trajectory_utils as traj_utils
 #import datasets.videotransforms as videotransforms
 from datasets.dataset import StrokeFeatureSequenceDataset
 #from datasets.dataset import StrokeFeaturePairsDataset
@@ -35,8 +34,7 @@ import attn_utils
 from collections import Counter
 from create_bovw import make_codebook
 from create_bovw import create_bovw_SA  #create_bovw_OMP   #
-from create_bovw import vis_cluster
-from sklearn.externals import joblib
+from sklearn.decomposition import PCA
 import warnings
 
 np.seterr(divide='ignore', invalid='ignore')
@@ -54,34 +52,20 @@ feat, feat_val, feat_test = "of_feats_grid20.pkl","of_feats_val_grid20.pkl", "of
 # "of_snames_grid20.pkl" ; "2dcnn_snames_train.pkl" ; "3dcnn_snames_train.pkl";
 # "hoof_snames_b20.pkl"
 snames, snames_val, snames_test = "of_snames_grid20.pkl", "of_snames_val_grid20.pkl", "of_snames_test_grid20.pkl"
-cluster_size = 1000
+cluster_size = 256
 INPUT_SIZE = cluster_size      # OFGRID: 576, 3DCNN: 512, 2DCNN: 2048
 HIDDEN_SIZE = 256
 N_LAYERS = 2
 bidirectional = True
 
 km_filename = "km_onehot"
-log_path = "logs/bovgru_SA_of20_Hidden256_tmp"
+log_path = "logs/bovgru_SA_of20_Hidden256_pca"
 # bow_HL_ofAng_grid20 ; bow_HL_2dres ; bow_HL_3dres_seq16; bow_HL_hoof_b20_mth2
 feat_path = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs/bow_HL_ofAng_grid20"
 
 #HIST_DIFFS = "/home/arpan/VisionWorkspace/Cricket/localization_gru/hist_diff_highlights_gray"
 #SBD_MODEL = "/home/arpan/VisionWorkspace/Cricket/scripts/supporting_files/sbd_model_RF_histDiffs_gray.pkl"
 
-def read_boundaries(vkeys, hist_diffs_path, sbd_model):
-    # load the model
-    model = joblib.load(sbd_model)
-    boundaries = {}
-    for k in vkeys:
-        vidfile = k.rsplit('/', 1)[1]
-        feature_file = os.path.join(hist_diffs_path, vidfile.rsplit('.', 1)[0]+'.npy')
-        vfeat = np.load(feature_file)       # load feature
-        vpreds = model.predict(vfeat)       # make prediction
-        idx_preds = np.argwhere(vpreds)     # get indices where 1
-        # convert to list of indices where +ve predictions
-        vid_boundaries = idx_preds.reshape(idx_preds.shape[0]).tolist()
-        boundaries[vidfile] = vid_boundaries
-    return boundaries
 
 def extract_of_features(feat_path, dataset, labspath, train_lst, val_lst):
     
@@ -107,7 +91,6 @@ def extract_of_features(feat_path, dataset, labspath, train_lst, val_lst):
             pickle.dump(features_val, fp)
         with open(os.path.join(feat_path, "of_snames_val_grid"+str(grid)+".pkl"), "wb") as fp:
             pickle.dump(strokes_name_id_val, fp)
-
 
 def train_model(features, stroke_names_id, model, dataloaders, criterion, 
                 optimizer, scheduler, labs_keys, labs_values, num_epochs=25):
@@ -278,7 +261,21 @@ def normalize_feats(features, avg, std):
         features[k] = v
         
     return features
-    
+
+def replace_feats(vecs, features, stroke_names_id):
+    start = 0
+    for key in stroke_names_id:
+        features[key] = vecs[start:start+(features[key].shape[0])]
+        start += features[key].shape[0]
+
+def calc_pca(X, pca=None, dims=10):
+    if pca is None:
+        pca = PCA(n_components=dims)
+        pca.fit(X)
+        
+    res = pca.transform(X)
+    return res, pca
+
 
 def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16, 
          STEP=16, nstrokes=-1, N_EPOCHS=25):
@@ -326,16 +323,19 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     features, stroke_names_id = attn_utils.read_feats(feat_path, feat, snames)
     # get matrix of features from dictionary (N, vec_size)
     vecs = []
-    for key in sorted(list(features.keys())):
+    for key in stroke_names_id:
         vecs.append(features[key])
     vecs = np.vstack(vecs)
     
     vecs[np.isnan(vecs)] = 0
     vecs[np.isinf(vecs)] = 0
     
-#    avg, std = np.mean(vecs, axis=0), np.std(vecs, axis=0)
-#    vecs = (vecs - avg) / std
+    
+    avg, std = np.mean(vecs, axis=0), np.std(vecs, axis=0)
+    vecs = (vecs - avg) / std       # subtract from column
 #    features = normalize_feats(features, avg, std)
+    vecs_ , pca = calc_pca(vecs)
+    replace_feats(vecs_, features, stroke_names_id)
     
     #fc7 layer output size (4096) 
     INP_VEC_SIZE = vecs.shape[-1]
@@ -344,7 +344,7 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     km_filepath = os.path.join(log_path, km_filename)
 #    # Uncomment only while training.
     if not os.path.isfile(km_filepath+"_C"+str(cluster_size)+".pkl"):
-        km_model = make_codebook(vecs, cluster_size)  #, model_type='gmm') 
+        km_model = make_codebook(vecs_, cluster_size)  #, model_type='gmm') 
         ##    # Save to disk, if training is performed
         print("Writing the KMeans models to disk...")
         pickle.dump(km_model, open(km_filepath+"_C"+str(cluster_size)+".pkl", "wb"))
@@ -364,7 +364,15 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     
     features_val, stroke_names_id_val = attn_utils.read_feats(feat_path, feat_val, 
                                                               snames_val)
-#    features_val = normalize_feats(features_val, avg, std)
+    vecs = []
+    for key in stroke_names_id_val:
+        vecs.append(features_val[key])
+    vecs = np.vstack(vecs)
+    vecs[np.isnan(vecs)] = 0
+    vecs[np.isinf(vecs)] = 0
+    vecs = (vecs - avg) / std
+    vecs_ , _ = calc_pca(vecs, pca)
+    replace_feats(vecs_, features_val, stroke_names_id_val)
     
     print("Create numpy one hot representation for val features...")
     onehot_feats_val = create_bovw_SA(features_val, stroke_names_id_val, km_model)
@@ -377,6 +385,17 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     ###########################################################################
     features_test, stroke_names_id_test = attn_utils.read_feats(feat_path, feat_test, 
                                                               snames_test)
+    
+    vecs = []
+    for key in stroke_names_id_test:
+        vecs.append(features_test[key])
+    vecs = np.vstack(vecs)
+    vecs[np.isnan(vecs)] = 0
+    vecs[np.isinf(vecs)] = 0
+    vecs = (vecs - avg) / std
+    vecs_ , _ = calc_pca(vecs, pca)
+    replace_feats(vecs_, features_test, stroke_names_id_test)
+    
 #    features_test = normalize_feats(features_test, avg, std)
     print("Create numpy one hot representation for val features...")
     onehot_feats_test = create_bovw_SA(features_test, stroke_names_id_test, km_model)
@@ -439,11 +458,11 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
 #            print("\t",name)
     
     # Observe that all parameters are being optimized
-#    optimizer_ft = torch.optim.Adam(model.parameters(), lr=0.001)
-    optimizer_ft = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
+    optimizer_ft = torch.optim.Adam(model.parameters(), lr=0.001)
+#    optimizer_ft = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
     
     # Decay LR by a factor of 0.1 every 7 epochs
-    exp_lr_scheduler = StepLR(optimizer_ft, step_size=10, gamma=0.1)
+    exp_lr_scheduler = StepLR(optimizer_ft, step_size=15, gamma=0.1)
     
     ###########################################################################
     # Training the model    

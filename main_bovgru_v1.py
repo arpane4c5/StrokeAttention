@@ -21,6 +21,7 @@ from torchvision import transforms
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
 from torch.utils.data import WeightedRandomSampler
+from utils import trajectory_utils as traj_utils
 
 from utils import autoenc_utils
 #import datasets.videotransforms as videotransforms
@@ -33,7 +34,7 @@ import attn_model
 import attn_utils
 from collections import Counter
 from create_bovw import make_codebook
-from create_bovw import create_bovw_onehot
+from create_bovw import create_bovw_SA
 from create_bovw import vis_clusters
 from sklearn.externals import joblib
 import warnings
@@ -45,8 +46,8 @@ warnings.filterwarnings("ignore")
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 feat, feat_val = "of_feats_grid20.pkl", "of_feats_val_grid20.pkl"
 snames, snames_val = "of_snames_grid20.pkl", "of_snames_val_grid20.pkl"
-feat2, feat_val2 = "2dcnn_feats_train.pkl", "2dcnn_feats_val.pkl" # "hoof_feats_b20.pkl", "hoof_feats_val_b20.pkl"
-snames2, snames_val2 = "2dcnn_snames_train.pkl", "2dcnn_snames_val.pkl" #"hoof_snames_b20.pkl", "hoof_snames_val_b20.pkl"
+feat2, feat_val2 = "hog_feats.pkl", "hog_feats_val.pkl"  #"hoof_feats_b20.pkl", "hoof_feats_val_b20.pkl" # "2dcnn_feats_train.pkl", "2dcnn_feats_val.pkl"
+snames2, snames_val2 = "hog_snames.pkl", "hog_snames_val.pkl" #"hoof_snames_b20.pkl", "hoof_snames_val_b20.pkl" # "2dcnn_snames_train.pkl", "2dcnn_snames_val.pkl"
 cluster_size = 1000
 INPUT_SIZE = cluster_size      # OFGRID: 576, 3DCNN: 512, 2DCNN: 2048
 HIDDEN_SIZE = 256
@@ -56,7 +57,7 @@ bidirectional = True
 km_filename = "km_onehot"
 log_path = "logs/bovgru_2stream"
 feat_path = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs/bow_HL_ofAng_grid20"
-feat_path2 = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs/bow_HL_2dres"  #bow_HL_hoof_b20_mth2"
+feat_path2 = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs/bow_HL_HOG" #bow_HL_hoof_b20_mth2" # bow_HL_2dres"
 
 
 def train_model(features, stroke_names_id, model, dataloaders, criterion, 
@@ -112,7 +113,7 @@ def train_model(features, stroke_names_id, model, dataloaders, criterion,
                         optimizer.step()
 
                 # statistics
-                running_loss += loss.item() * inputs1.size(0)
+                running_loss += loss.item() #* inputs1.size(0)
 #                print("Iter : {} :: Running Loss : {}".format(bno, running_loss))
                 running_corrects += torch.sum(preds == labels.data)
                 
@@ -192,9 +193,9 @@ def predict(features, stroke_names_id, model, dataloaders, labs_keys, labs_value
     predictions = {"gt": gt_list, "pred": pred_list}
     
     # Save prediction and ground truth labels
-    with open(os.path.join(log_path, "preds_Seq"+str(seq)+"_C"+str(cluster_size)+".pkl"), "wb") as fp:
+    with open(os.path.join(log_path, "preds_test_Seq"+str(seq)+"_C"+str(cluster_size)+".pkl"), "wb") as fp:
         pickle.dump(predictions, fp)
-    with open(os.path.join(log_path, "preds_Seq"+str(seq)+"_C"+str(cluster_size)+".pkl"), "rb") as fp:
+    with open(os.path.join(log_path, "preds_test_Seq"+str(seq)+"_C"+str(cluster_size)+".pkl"), "rb") as fp:
         predictions = pickle.load(fp)
     gt_list = predictions['gt']
     pred_list = predictions['pred']
@@ -233,6 +234,12 @@ def predict(features, stroke_names_id, model, dataloaders, labs_keys, labs_value
     print(confusion_mat)
     return (float(correct) / len(pred_labels))
     
+def form_lower_dim_dict(features, stroke_names, vecs):
+    start = 0
+    for key in stroke_names:
+        count = features[key].shape[0]
+        features[key] = vecs[start:(start+count)]
+        start += count
 
 def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16, 
          STEP=16, nstrokes=-1, N_EPOCHS=25):
@@ -279,7 +286,7 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     features2, stroke_names_id2= attn_utils.read_feats(feat_path2, feat2, snames2)
     # get matrix of features from dictionary (N, vec_size)
     vecs, vecs2 = [], []
-    for key in sorted(list(features.keys())):
+    for key in stroke_names_id:
         vecs.append(features[key])
         vecs2.append(features2[key])
     vecs, vecs2 = np.vstack(vecs), np.vstack(vecs2)
@@ -288,6 +295,11 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     vecs[np.isinf(vecs)] = 0
     vecs2[np.isnan(vecs2)] = 0
     vecs2[np.isinf(vecs2)] = 0
+    
+#    vecs = traj_utils.apply_PCA(vecs, 10)
+#    vecs2 = traj_utils.apply_PCA(vecs2, 10)
+#    form_lower_dim_dict(features, stroke_names_id, vecs)
+#    form_lower_dim_dict(features2, stroke_names_id2, vecs2)
     
     #fc7 layer output size (4096) 
     INP_VEC_SIZE, INP_VEC_SIZE2 = vecs.shape[-1], vecs2.shape[-1]
@@ -314,9 +326,9 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
         km_model2 = pickle.load(open(km_filepath+"_C"+str(cluster_size)+"_2.pkl", 'rb'))
         
     print("Create numpy one hot representation for train features...")
-    onehot_feats = create_bovw_onehot(features, stroke_names_id, km_model)
+    onehot_feats = create_bovw_SA(features, stroke_names_id, km_model)
     print("Create numpy one hot representation for train features2...")
-    onehot_feats2 = create_bovw_onehot(features2, stroke_names_id2, km_model2)
+    onehot_feats2 = create_bovw_SA(features2, stroke_names_id2, km_model2)
     
     ft_path = os.path.join(log_path, "onehot_C"+str(cluster_size)+"_train.pkl")
     ft_path2 = os.path.join(log_path, "onehot_C"+str(cluster_size)+"_train_2.pkl")
@@ -331,10 +343,26 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
                                                               snames_val)
     features_val2, stroke_names_id_val2 = attn_utils.read_feats(feat_path2, feat_val2, 
                                                               snames_val2)
+    
+#    # get matrix of features from dictionary (N, vec_size)
+#    vecs, vecs2 = [], []
+#    for key in stroke_names_id:
+#        vecs.append(features[key])
+#        vecs2.append(features2[key])
+#    vecs, vecs2 = np.vstack(vecs), np.vstack(vecs2)
+#    
+#    vecs[np.isnan(vecs)] = 0
+#    vecs[np.isinf(vecs)] = 0
+#    vecs2[np.isnan(vecs2)] = 0
+#    vecs2[np.isinf(vecs2)] = 0
+#    
+#    form_lower_dim_dict(features, stroke_names_id, vecs)
+#    form_lower_dim_dict(features2, stroke_names_id2, vecs2)
+    
     print("Create numpy one hot representation for val features...")
-    onehot_feats_val = create_bovw_onehot(features_val, stroke_names_id_val, km_model)
+    onehot_feats_val = create_bovw_SA(features_val, stroke_names_id_val, km_model)
     print("Create numpy one hot representation for val features2...")
-    onehot_feats_val2 = create_bovw_onehot(features_val2, stroke_names_id_val2, km_model2)
+    onehot_feats_val2 = create_bovw_SA(features_val2, stroke_names_id_val2, km_model2)
     ft_path_val = os.path.join(log_path, "onehot_C"+str(cluster_size)+"_val.pkl")
     ft_path_val2 = os.path.join(log_path, "onehot_C"+str(cluster_size)+"_val_2.pkl")
     with open(ft_path_val, "wb") as fp:
@@ -369,7 +397,7 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
 
     num_classes = len(list(set(labs_values)))
     
-    vis_clusters(features, onehot_feats, stroke_names_id, 2, DATASET, log_path)
+#    vis_clusters(features, onehot_feats, stroke_names_id, 2, DATASET, log_path)
     
     ###########################################################################    
     
@@ -391,14 +419,14 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     for name, param in model.named_parameters():
         if param.requires_grad == True:
             params_to_update.append(param)
-            print("\t",name)
+#            print("\t",name)
     
     # Observe that all parameters are being optimized
-#    optimizer_ft = torch.optim.Adam(model.parameters(), lr=0.001)
-    optimizer_ft = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
+    optimizer_ft = torch.optim.Adam(model.parameters(), lr=0.001)
+#    optimizer_ft = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
     
     # Decay LR by a factor of 0.1 every 7 epochs
-    exp_lr_scheduler = StepLR(optimizer_ft, step_size=10, gamma=0.1)
+    exp_lr_scheduler = StepLR(optimizer_ft, step_size=15, gamma=0.1)
     
     ###########################################################################
     # Training the model    
@@ -410,8 +438,8 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
                         num_epochs=N_EPOCHS)
     
     end = time.time()
-    
-    # save the best performing model
+#    
+#    # save the best performing model
     attn_utils.save_model_checkpoint(log_path, model, N_EPOCHS, 
                                      "S"+str(SEQ_SIZE)+"C"+str(cluster_size)+"_SGD")
     # Load model checkpoints
@@ -437,7 +465,7 @@ if __name__ == '__main__':
     CLASS_IDS = "/home/arpan/VisionWorkspace/Cricket/cluster_strokes/configs/Class Index_Strokes.txt"    
     ANNOTATION_FILE = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/shots_classes.txt"
 
-    seq_sizes = range(20, 21, 2)
+    seq_sizes = range(32, 33, 2)
     STEP = 1
     BATCH_SIZE = 32
     N_EPOCHS = 30

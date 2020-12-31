@@ -55,7 +55,7 @@ def plot_acc_of20_GRU_HA(x, keys, l, xlab, ylab, fname):
     cols = ['r','g','b', 'c']
     print(l)
     fig = plt.figure(2)
-    plt.title("Accuracy Vs Sequence Length", fontsize=13)
+    plt.title("Accuracy Vs No. of Clusters(C)", fontsize=13)
     for i in range(len(keys)):
         acc = l[keys[i]]
         plt.plot(x[(len(x)-len(acc)):], acc, lw=1, color=cols[i], marker='.', label=keys[i])
@@ -204,14 +204,14 @@ if __name__ == '__main__':
     ###########################################################################
     # Plot Comparison for different features with HA and C=1k
     
-    keys = ["OF Grid=20", "HOOF Bins=20", "2D CNN", "3DCNN"]  # Hidden=256, C=1k 
-    l = {keys[0] : OF20_HA_C1k_H256, keys[1] : HOOF_B20_HA_C1k, 
-         keys[2] : CNN2D_HA_C1k_H256, keys[3] : CNN3D_HA_C1k_H256}
+#    keys = ["OF Grid=20", "HOOF Bins=20", "2D CNN", "3DCNN"]  # Hidden=256, C=1k 
+#    l = {keys[0] : OF20_HA_C1k_H256, keys[1] : HOOF_B20_HA_C1k, 
+#         keys[2] : CNN2D_HA_C1k_H256, keys[3] : CNN3D_HA_C1k_H256}
+#    
+#    fname = os.path.join("logs", "CompareFeats.png")
+#    plot_acc_diff_feats(seq, keys, l, "Sequence Length", "Accuracy", fname)
     
-    fname = os.path.join("logs", "CompareFeats.png")
-    plot_acc_diff_feats(seq, keys, l, "Sequence Length", "Accuracy", fname)
-    
-        ###########################################################################
+    ###########################################################################
     # Plot comparing OF10 Vs OF20 with H256
     
 #    keys = ["OF Grid=10; C=1000", "OF Grid=20; C=1000"]  # HA Hidden=256 
@@ -219,4 +219,19 @@ if __name__ == '__main__':
 #    
 #    fname = os.path.join("logs", "OF10_Vs_OF20_HA_C1k_H256.png")
 #    plot_acc_of20_GRU_HA(seq, keys, l, "Sequence Length", "Accuracy", fname)
+    
+    ###########################################################################
+    # Plot Comparison for different cluster sizes with SA and HIDDEN=128, SEQ=22
+    
+    nclust_acc = [0.6285714285714286, 0.7047619047619048, 0.7238095238095238, 0.6571428571428571,
+           0.7333333333333333, 0.6476190476190476, 0.7142857142857143, 0.7142857142857143, 
+           0.6476190476190476, 0.7523809523809524, 0.5714285714285714, 0.7142857142857143,
+           0.7333333333333333, 0.7047619047619048, 0.7714285714285715, 0.6857142857142857,
+           0.7142857142857143, 0.7238095238095238, 0.6857142857142857, 0.7142857142857143]
+    keys = ["OF Grid=20 Hidden=128"]  # Hidden=256, C=1k 
+    l = {keys[0] : nclust_acc}
+    
+    fname = os.path.join("logs", "VaryingNWords.png")
+    plot_acc_of20_GRU_HA(list(range(10, 201, 10)), keys, l, 
+                         "No. of Clusters/Visual Words (C)", "Accuracy", fname)
     

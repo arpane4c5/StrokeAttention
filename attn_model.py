@@ -222,40 +222,40 @@ class GRUBoWHAClassifier(nn.Module):
         enc_h = enc_h.to(device)
         return enc_h
     
-class GRUBoWSAClassifier(nn.Module):
-    '''For Soft Assignment sequences
-    '''
-    def __init__(self, input_size, hidden_size, n_classes, n_layers=1, 
-                 bidirectional=False):
-        super(GRUBoWSAClassifier, self).__init__()
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.n_classes = n_classes
-        self.n_directions = int(bidirectional) + 1
-        self.n_layers = n_layers
-        self.gru1 = nn.GRU(input_size, hidden_size, n_layers, batch_first=True,
-                          bidirectional=bidirectional)
-#        self.gru2 = nn.GRU(hidden_size, hidden_size, n_layers, batch_first=True,
+#class GRUBoWSAClassifier(nn.Module):
+#    '''For Soft Assignment sequences
+#    '''
+#    def __init__(self, input_size, hidden_size, n_classes, n_layers=1, 
+#                 bidirectional=False):
+#        super(GRUBoWSAClassifier, self).__init__()
+#        self.input_size = input_size
+#        self.hidden_size = hidden_size
+#        self.n_classes = n_classes
+#        self.n_directions = int(bidirectional) + 1
+#        self.n_layers = n_layers
+#        self.gru1 = nn.GRU(input_size, hidden_size, n_layers, batch_first=True,
 #                          bidirectional=bidirectional)
-        self.fc = nn.Linear(hidden_size * self.n_directions, hidden_size)
-        self.classifier = nn.Linear(hidden_size, n_classes)
-        self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(p=0.5)
-        self.softmax = nn.Softmax(dim=1)
-        
-    def forward(self, inputs, hidden):
-        batch_size = inputs.size(0)
-        output, hidden = self.gru1(inputs, hidden)
-#        output, hidden = self.gru2(output, hidden)
-        output = self.dropout(self.fc(output[:,-1,:]))
-#        logits = self.classifier(output)
-#        probs = self.softmax(logits.view(-1, self.n_classes))
-        return output, hidden
-    
-    def init_hidden(self, batch_size):
-        enc_h = torch.zeros(self.n_directions * self.n_layers, batch_size, self.hidden_size)
-        enc_h = enc_h.to(device)
-        return enc_h
+##        self.gru2 = nn.GRU(hidden_size, hidden_size, n_layers, batch_first=True,
+##                          bidirectional=bidirectional)
+#        self.fc = nn.Linear(hidden_size * self.n_directions, hidden_size)
+#        self.classifier = nn.Linear(hidden_size, n_classes)
+#        self.relu = nn.ReLU()
+#        self.dropout = nn.Dropout(p=0.5)
+#        self.softmax = nn.Softmax(dim=1)
+#        
+#    def forward(self, inputs, hidden):
+#        batch_size = inputs.size(0)
+#        output, hidden = self.gru1(inputs, hidden)
+##        output, hidden = self.gru2(output, hidden)
+#        output = self.dropout(self.fc(output[:,-1,:]))
+##        logits = self.classifier(output)
+##        probs = self.softmax(logits.view(-1, self.n_classes))
+#        return output, hidden
+#    
+#    def init_hidden(self, batch_size):
+#        enc_h = torch.zeros(self.n_directions * self.n_layers, batch_size, self.hidden_size)
+#        enc_h = enc_h.to(device)
+#        return enc_h
         
 class GRUClassifier(nn.Module):
     
@@ -440,37 +440,37 @@ if __name__ == '__main__':
 #        enc_h = enc_h.to(device)
 #        return enc_h
 #    
-#class GRUBoWSAClassifier(nn.Module):
-#    '''For Soft Assignment sequences
-#    '''
-#    def __init__(self, input_size, hidden_size, n_classes, n_layers=1, 
-#                 bidirectional=False):
-#        super(GRUBoWSAClassifier, self).__init__()
-#        self.input_size = input_size
-#        self.hidden_size = hidden_size
-#        self.n_classes = n_classes
-#        self.n_directions = int(bidirectional) + 1
-#        self.n_layers = n_layers
-#        self.gru1 = nn.GRU(input_size, hidden_size, n_layers, batch_first=True,
+class GRUBoWSAClassifier(nn.Module):
+    '''For Soft Assignment sequences
+    '''
+    def __init__(self, input_size, hidden_size, n_classes, n_layers=1, 
+                 bidirectional=False):
+        super(GRUBoWSAClassifier, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.n_classes = n_classes
+        self.n_directions = int(bidirectional) + 1
+        self.n_layers = n_layers
+        self.gru1 = nn.GRU(input_size, hidden_size, n_layers, batch_first=True,
+                          bidirectional=bidirectional)
+#        self.gru2 = nn.GRU(hidden_size, hidden_size, n_layers, batch_first=True,
 #                          bidirectional=bidirectional)
-##        self.gru2 = nn.GRU(hidden_size, hidden_size, n_layers, batch_first=True,
-##                          bidirectional=bidirectional)
-#        self.fc = nn.Linear(hidden_size * self.n_directions, hidden_size)
-#        self.classifier = nn.Linear(hidden_size, n_classes)
-#        self.relu = nn.ReLU()
-#        self.dropout = nn.Dropout(p=0.5)
-#        self.softmax = nn.Softmax(dim=1)
-#        
-#    def forward(self, inputs, hidden):
-#        batch_size = inputs.size(0)
-#        output, hidden = self.gru1(inputs, hidden)
-##        output, hidden = self.gru2(output, hidden)
-#        output = self.dropout(self.fc(output[:,-1,:]))
-#        logits = self.classifier(output)
-#        probs = self.softmax(logits.view(-1, self.n_classes))
-#        return probs, hidden
-#    
-#    def init_hidden(self, batch_size):
-#        enc_h = torch.zeros(self.n_directions * self.n_layers, batch_size, self.hidden_size)
-#        enc_h = enc_h.to(device)
-#        return enc_h
+        self.fc = nn.Linear(hidden_size * self.n_directions, hidden_size)
+        self.classifier = nn.Linear(hidden_size, n_classes)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(p=0.5)
+        self.softmax = nn.Softmax(dim=1)
+        
+    def forward(self, inputs, hidden):
+        batch_size = inputs.size(0)
+        output, hidden = self.gru1(inputs, hidden)
+#        output, hidden = self.gru2(output, hidden)
+        output = self.dropout(self.fc(output[:,-1,:]))
+        logits = self.classifier(output)
+        probs = self.softmax(logits.view(-1, self.n_classes))
+        return probs, hidden
+    
+    def init_hidden(self, batch_size):
+        enc_h = torch.zeros(self.n_directions * self.n_layers, batch_size, self.hidden_size)
+        enc_h = enc_h.to(device)
+        return enc_h

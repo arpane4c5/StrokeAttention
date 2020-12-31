@@ -72,7 +72,7 @@ def train_model(model, dataloaders, criterion, optimizer, scheduler, labs_keys,
                 labels = attn_utils.get_batch_labels(vid_path, stroke, labs_keys, labs_values, 1)# inputs.size(1))
                 # Extract spatio-temporal features from clip using 3D ResNet (For SL >= 16)
                 inputs = inputs.permute(0, 2, 1, 3, 4).float()
-                inputs[:, [0, 2], ...] = inputs[:, [2, 0], ...]       # convert RGB to BGR for C3D pretrained
+#                inputs[:, [0, 2], ...] = inputs[:, [2, 0], ...]       # convert RGB to BGR for C3D pretrained
 #                inputs = inputs.permute(0, 4, 1, 2, 3).float()
                 inputs = inputs.to(device)
                 labels = labels.to(device)
@@ -251,7 +251,7 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
                                          frames_per_clip=SEQ_SIZE, step_between_clips=STEP, 
                                          train=True, framewiseTransform=False, 
                                          transform=train_transforms)
-    val_dataset = CricketStrokesDataset(val_lst, DATASET, LABELS, CLASS_IDS, 
+    val_dataset = CricketStrokesDataset(test_lst, DATASET, LABELS, CLASS_IDS, 
                                         frames_per_clip=SEQ_SIZE, step_between_clips=STEP, 
                                         train=False, framewiseTransform=False, 
                                         transform=test_transforms)
@@ -288,7 +288,7 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     model.fc8 = nn.Linear(4096, num_classes)
     model.fc7 = nn.Linear(4096, 4096)
     model.fc6 = nn.Linear(8192, 4096)
-#    model.conv5b = nn.Conv3d(512, 512, kernel_size=(3, 3, 3), padding=(1, 1, 1))
+    model.conv5b = nn.Conv3d(512, 512, kernel_size=(3, 3, 3), padding=(1, 1, 1))
 #    for ft in model.parameters():
 #        ft.requires_grad = False
     model = model.to(device)
@@ -307,26 +307,26 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     
     # Observe that all parameters are being optimized
 #    optimizer_ft = torch.optim.Adam(params_to_update, lr=0.01)
-    optimizer_ft = optim.SGD(params_to_update, lr=0.001, momentum=0.9)
+    optimizer_ft = optim.SGD(params_to_update, lr=0.01, momentum=0.9)
     
     # Decay LR by a factor of 0.1 every 7 epochs
-    lr_scheduler = StepLR(optimizer_ft, step_size=15, gamma=0.1)
+    lr_scheduler = StepLR(optimizer_ft, step_size=10, gamma=0.1)
     
     ###########################################################################
-    # Training the model
-    start = time.time()
-    
-    model = train_model(model, data_loaders, criterion, optimizer_ft, lr_scheduler, 
-                        labs_keys, labs_values, num_epochs=N_EPOCHS)
-        
-    end = time.time()
-    
-    # save the best performing model
-    attn_utils.save_model_checkpoint(base_name, model, N_EPOCHS, "SGD_c3d")
+#    # Training the model
+#    start = time.time()
+#    
+#    model = train_model(model, data_loaders, criterion, optimizer_ft, lr_scheduler, 
+#                        labs_keys, labs_values, num_epochs=N_EPOCHS)
+#        
+#    end = time.time()
+#    
+#    # save the best performing model
+#    attn_utils.save_model_checkpoint(base_name, model, N_EPOCHS, "SGD_c3d")
     # Load model checkpoints
     model = attn_utils.load_weights(base_name, model, N_EPOCHS, "SGD_c3d")
     
-    print("Total Execution time for {} epoch : {}".format(N_EPOCHS, (end-start)))
+#    print("Total Execution time for {} epoch : {}".format(N_EPOCHS, (end-start)))
 
 #    ###########################################################################    
     
