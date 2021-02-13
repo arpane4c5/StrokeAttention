@@ -9,8 +9,49 @@ Created on Thu Aug 27 06:25:01 2020
 from matplotlib import pyplot as plt
 import os
 import numpy as np
+import re
 #plt.style.use('ggplot')
 
+
+def plot_traintest_loss(keys, l, xlab, ylab, seq, batch, destfile):
+    # Plot the loss values for the different epochs in one trained model
+    keylist = range(1, len(l[keys[0]])+1)      # x-axis for 30 epochs
+    cols = ['r','g','b', 'c']    
+    print("Iteration and Accuracy Lists : ")
+    print(keylist)
+    print(l)
+    fig = plt.figure(2)
+    plt.title("Loss Vs Epoch (Seq_Len="+str(seq)+", Batch="+str(batch)+")", fontsize=12)
+    plt.plot(keylist, l[keys[0]], lw=1, color=cols[0], marker='.', label= keys[0])
+    plt.plot(keylist, l[keys[1]], lw=1, color=cols[1], marker='.', label= keys[1])
+    plt.xlabel(xlab)
+    plt.ylabel(ylab)
+    plt.legend()
+#    plt.show()
+    plt.savefig(destfile, bbox_inches='tight', dpi=300)    
+    plt.close(fig)
+    return
+
+def plot_traintest_accuracy(keys, l, xlab, ylab, seq, batch, best, destfile):
+    # Plot the accuracy values for the different epochs in one trained model
+    keylist = range(1, len(l[keys[0]])+1)      # x-axis for 30 epochs
+    cols = ['r','g','b', 'c']
+    print("Iteration and Accuracy Lists : ")
+    print(keylist)
+    print(l)
+    fig = plt.figure(2)
+    plt.title("Accuracy Vs Epoch (Seq_Len="+str(seq)+", Batch="+str(batch)+")", fontsize=12)
+    plt.plot(keylist, l[keys[0]], lw=1, color=cols[0], marker='.', label= keys[0])
+    plt.plot(keylist, l[keys[1]], lw=1, color=cols[1], marker='.', label= keys[1])
+    plt.xlabel(xlab)
+    plt.ylabel(ylab)
+#    plt.axvline(x=best, color='r', linestyle='--')
+    plt.legend()
+    plt.ylim(bottom=0, top=1)
+#    plt.show()
+    plt.savefig(destfile, bbox_inches='tight', dpi=300)
+    plt.close(fig)
+    return
 
 def plot_accuracy(x, keys, l, xlab, ylab, fname):
     
@@ -42,7 +83,7 @@ def plot_acc_of20(x, keys, l, xlab, ylab, fname):
         plt.plot(x[(len(x)-len(acc)):], acc, lw=1, color=cols[i], marker='.', label=keys[i])
     plt.xlabel(xlab, fontsize=12)
     plt.ylabel(ylab, fontsize=12)
-    plt.axvline(x=20, color='r', linestyle='--')
+    plt.axvline(x=24, color='r', linestyle='--')
     plt.legend(loc=4)
     plt.ylim(bottom=0, top=1)
     plt.show()
@@ -221,17 +262,92 @@ if __name__ == '__main__':
 #    plot_acc_of20_GRU_HA(seq, keys, l, "Sequence Length", "Accuracy", fname)
     
     ###########################################################################
-    # Plot Comparison for different cluster sizes with SA and HIDDEN=128, SEQ=22
+#    # Plot Comparison for different cluster sizes with SA and HIDDEN=128, SEQ=22
+#    
+#    nclust_acc = [0.6285714285714286, 0.7047619047619048, 0.7238095238095238, 0.6571428571428571,
+#           0.7333333333333333, 0.6476190476190476, 0.7142857142857143, 0.7142857142857143, 
+#           0.6476190476190476, 0.7523809523809524, 0.5714285714285714, 0.7142857142857143,
+#           0.7333333333333333, 0.7047619047619048, 0.7714285714285715, 0.6857142857142857,
+#           0.7142857142857143, 0.7238095238095238, 0.6857142857142857, 0.7142857142857143]
+#    keys = ["OF Grid=20 Hidden=128"]  # Hidden=256, C=1k 
+#    l = {keys[0] : nclust_acc}
+#    
+#    fname = os.path.join("logs", "VaryingNWords.png")
+#    plot_acc_of20_GRU_HA(list(range(10, 201, 10)), keys, l, 
+#                         "No. of Clusters/Visual Words (C)", "Accuracy", fname)
     
-    nclust_acc = [0.6285714285714286, 0.7047619047619048, 0.7238095238095238, 0.6571428571428571,
-           0.7333333333333333, 0.6476190476190476, 0.7142857142857143, 0.7142857142857143, 
-           0.6476190476190476, 0.7523809523809524, 0.5714285714285714, 0.7142857142857143,
-           0.7333333333333333, 0.7047619047619048, 0.7714285714285715, 0.6857142857142857,
-           0.7142857142857143, 0.7238095238095238, 0.6857142857142857, 0.7142857142857143]
-    keys = ["OF Grid=20 Hidden=128"]  # Hidden=256, C=1k 
-    l = {keys[0] : nclust_acc}
+#    ###########################################################################
+#    # 2 Stream (OF20 + HOG SA C=1000) validation accuracies for seq=range(2, 41, 2)
+#    nclust_acc = [0.5428571428571428, 0.7428571428571429, 0.6, 0.7142857142857143, 
+#                  0.7238095238095238, 0.7047619047619048, 0.7142857142857143, 
+#                  0.6857142857142857, 0.7238095238095238, 0.780952380952381, 
+#                  0.7428571428571429, 0.780952380952381, 0.7428571428571429, 
+#                  0.7428571428571429, 0.7333333333333333, 0.7428571428571429, 
+#                  0.12380952380952381, 0.7047619047619048, 0.7142857142857143, 
+#                  0.638095238095238]
+#    
+#    keys = ["2 Stream GRU Hidden=256"]
+#    l = {keys[0] : nclust_acc}
+#    fname = os.path.join("logs/plot_data", "2Stream_OF20_HOG_seq2_40.png")
+#    plot_acc_of20(list(range(2, 41, 2)), keys, l, "Seq. Length", "Accuracy", fname)
+#    
+#    ###########################################################################
+#    
+#    # Plot the 2Stream GRU training (on HOG and OF20 feats SA) with Seq=24 and C=1000
+#    # Val Accuracy : 0.780952380952381 
+#    file = "logs/plot_data/2stream_seq24_C1000.txt" # 
+#    train_loss, test_loss, train_acc, test_acc = [], [], [], []
+#    with open(file, 'r') as fp:
+#        lines = fp.readlines()
+#    for line in lines: 
+#        line = line.strip()
+#        if 'train Loss:' in line:
+#            t = re.findall("\d+\.\d+", line)
+#            train_loss.append(float(t[0]))
+#            train_acc.append(float(t[1]))
+#        elif 'test Loss:' in line:
+#            t = re.findall("\d+\.\d+", line)
+#            test_loss.append(float(t[0]))
+#            test_acc.append(float(t[1]))
+#        elif 'SEQ_SIZE : ' in line:
+#            t = re.findall("\d+", line)
+#            seq = str(t[0])
+#    
+#    l1 = {"train loss" : train_loss, "test loss": test_loss}
+#    l2 = {"train accuracy" : train_acc, "test accuracy" : test_acc}
+#    best_ep = test_acc.index(max(test_acc)) + 1
+#    loss_file = 'logs/plot_data/2stream_losses_seq'+str(seq)+'.png'
+#    acc_file = 'logs/plot_data/2stream_acc_seq'+str(seq)+'.png'
+#    plot_traintest_loss(["train loss", "test loss"], l1, "Epochs", "Loss", seq, 32, loss_file)
+#    plot_traintest_accuracy(["train accuracy", "test accuracy"], l2, "Epochs", "Accuracy", seq, 
+#                            32, best_ep, acc_file)
+#    
+    ###########################################################################
+    # Plot the C3D finetuning losses (SEQ_SIZE = 16, STEP = 4, BATCH = 16, ITer=150/Ep)
+    file = "logs/plot_data/C3DFine_seq16_SGD.txt" # 
+    train_loss, test_loss, train_acc, test_acc = [], [], [], []
+    seq = 16
+    with open(file, 'r') as fp:
+        lines = fp.readlines()
+    for line in lines: 
+        line = line.strip()
+        if 'train Loss:' in line:
+            t = re.findall("\d+\.\d+", line)
+            train_loss.append(float(t[0]))
+            train_acc.append(float(t[1]))
+        elif 'test Loss:' in line:
+            t = re.findall("\d+\.\d+", line)
+            test_loss.append(float(t[0]))
+            test_acc.append(float(t[1]))
+            
+    l1 = {"train loss" : train_loss, "test loss": test_loss}
+    l2 = {"train accuracy" : train_acc, "test accuracy" : test_acc}
+    best_ep = test_acc.index(max(test_acc)) + 1
+    loss_file = 'logs/plot_data/C3DFine_seq16.png'
+    acc_file = 'logs/plot_data/C3DFine_acc_seq16.png'
+    plot_traintest_loss(["train loss", "test loss"], l1, "Epochs", "Loss", seq, 16, loss_file)
+    plot_traintest_accuracy(["train accuracy", "test accuracy"], l2, "Epochs", "Accuracy", seq, 
+                            16, best_ep, acc_file)
     
-    fname = os.path.join("logs", "VaryingNWords.png")
-    plot_acc_of20_GRU_HA(list(range(10, 201, 10)), keys, l, 
-                         "No. of Clusters/Visual Words (C)", "Accuracy", fname)
+    ###########################################################################
     

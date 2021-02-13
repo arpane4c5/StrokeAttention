@@ -5,3 +5,6 @@ log.txt
 logs/
 litSurvey.txt
 .data/
+hmdb51/checkpoints/
+hmdb51/feats/
+Video-Action-Transformer-Network-Pytorch--master/

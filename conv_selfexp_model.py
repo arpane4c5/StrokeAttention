@@ -381,4 +381,4 @@ class Conv3DAttention(nn.Module):
                              self.hidden_size)
         return hidden.to(device)
 
-        
+

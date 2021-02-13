@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Tue Sept 28 10:39:42 2020
+Created on Thu Jan 28 10:39:42 2021
 
 @author: arpan
 
-@Description: Training Transformer model on BoV sequences.
+@Description: Finetuning Transformer model for downstream task of sequence classification.
 """
 
 import os
@@ -19,7 +19,8 @@ import torch
 from torch import nn, optim
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
-#from torch.utils.data import WeightedRandomSampler
+from torch.utils.data import WeightedRandomSampler
+import torch.nn.functional as F
 
 from utils import autoenc_utils
 #import datasets.videotransforms as videotransforms
@@ -49,34 +50,18 @@ feat, feat_val, feat_test = "of_feats_grid20.pkl", "of_feats_val_grid20.pkl", "o
 # "of_snames_grid20.pkl" ; "2dcnn_snames_train.pkl" ; "3dcnn_snames_train.pkl";
 # "hoof_snames_b20.pkl"
 snames, snames_val, snames_test = "of_snames_grid20.pkl", "of_snames_val_grid20.pkl", "of_snames_test_grid20.pkl"
-cluster_size = 1000
+cluster_size = 300
 INPUT_SIZE = cluster_size      # OFGRID: 576, 3DCNN: 512, 2DCNN: 2048
 HIDDEN_SIZE = 256
 N_LAYERS = 2
 bidirectional = True
 
 km_filename = "km_onehot"
-log_path = "logs/bovtrans_HA_of20_Hidden200_C1000_pretrained"
+log_path = "logs/bovtransDown_HA_of20_Hidden200_AdamPre_C"+str(cluster_size)
+model_path = "logs/bovtrans_HA_of20_Hidden200_pretrained/"#transformer_ep30_S30C300_SGD.pt"
 # bow_HL_ofAng_grid20 ; bow_HL_2dres ; bow_HL_3dres_seq16; bow_HL_hoof_b20_mth2
 feat_path = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs/bow_HL_ofAng_grid20"
 
-#HIST_DIFFS = "/home/arpan/VisionWorkspace/Cricket/localization_gru/hist_diff_highlights_gray"
-#SBD_MODEL = "/home/arpan/VisionWorkspace/Cricket/scripts/supporting_files/sbd_model_RF_histDiffs_gray.pkl"
-#
-#def read_boundaries(vkeys, hist_diffs_path, sbd_model):
-#    # load the model
-#    model = joblib.load(sbd_model)
-#    boundaries = {}
-#    for k in vkeys:
-#        vidfile = k.rsplit('/', 1)[1]
-#        feature_file = os.path.join(hist_diffs_path, vidfile.rsplit('.', 1)[0]+'.npy')
-#        vfeat = np.load(feature_file)       # load feature
-#        vpreds = model.predict(vfeat)       # make prediction
-#        idx_preds = np.argwhere(vpreds)     # get indices where 1
-#        # convert to list of indices where +ve predictions
-#        vid_boundaries = idx_preds.reshape(idx_preds.shape[0]).tolist()
-#        boundaries[vidfile] = vid_boundaries
-#    return boundaries
 
 def extract_of_features(feat_path, dataset, labspath, train_lst, val_lst):
     
@@ -125,23 +110,25 @@ def train_model(features, stroke_names_id, model, dataloaders, criterion,
             running_loss = 0.0
             running_corrects = 0.0
             # Iterate over data.
-            for bno, (inputs, vid_path, stroke, targets, _) in enumerate(dataloaders[phase]):
+            for bno, (inputs, vid_path, stroke, _, labels) in enumerate(dataloaders[phase]):
                 # inputs of shape BATCH x SEQ_LEN x FEATURE_DIM
-#                labels = attn_utils.get_batch_labels(vid_path, stroke, labs_keys, labs_values, 1)
+                labels = attn_utils.get_batch_labels(vid_path, stroke, labs_keys, labs_values, inputs.shape[1])
                 # Extract spatio-temporal features from clip using 3D ResNet (For SL >= 16)
                 inputs = inputs.float()
                 inp_emb = attn_utils.get_long_tensor(inputs)    # comment out for SA
                 inputs = inp_emb.to(device)                     # comment out for SA
-                targets = attn_utils.get_long_tensor(targets).to(device)
                 inputs = inputs.t().contiguous()       # Convert to (SEQ, BATCH)
-                targets = targets.t().contiguous().view(-1)
+                labels = labels.to(device)
                 
                 # zero the parameter gradients
                 optimizer.zero_grad()
                 # forward
-                output = model(inputs)  # output size (SEQ_SIZE, BATCH, NCLUSTERS)
-                output = output.view(-1, INPUT_SIZE)    # To (BATCH*SEQ_SIZE, NCLUSTERS)
-                loss = criterion(output, targets)
+                output = model(inputs)  # output size (SEQ_SIZE, BATCH, NCLASSES)
+                output = output.permute(1, 0, 2).contiguous()
+                
+                output = F.softmax(output.view(-1, output.shape[-1]), dim=1)
+#                output = output.view(-1, output.shape[-1])    # To (BATCH*SEQ_SIZE, NCLUSTERS)
+                loss = criterion(output, labels)
                 # backward + optimize only if in training phase
                 if phase == 'train':
                     loss.backward()
@@ -154,11 +141,11 @@ def train_model(features, stroke_names_id, model, dataloaders, criterion,
                 # statistics
                 running_loss += loss.item()  #* inputs.size(0)
 #                print("Iter : {} :: Running Loss : {}".format(bno, running_loss))
-                running_corrects += torch.sum(preds == targets.data)
+                running_corrects += torch.sum(preds == labels.data)
 #                if bno==20:
 #                    break
 
-            epoch_loss = running_loss / len(dataloaders[phase].dataset)
+            epoch_loss = running_loss / len(dataloaders[phase]) #.dataset)
             epoch_acc = running_corrects.double() / (inputs.size(0) * len(dataloaders[phase].dataset))
 
             print('{} Loss: {:.4f} Acc: {:.4f} LR: {}'.format(phase, epoch_loss, epoch_acc, 
@@ -188,24 +175,26 @@ def predict(features, stroke_names_id, model, dataloaders, labs_keys, labs_value
     model = model.eval()
     gt_list, pred_list, stroke_ids  = [], [], []
     # Iterate over data.
-    for bno, (inputs, vid_path, stroke, targets, labels) in enumerate(dataloaders[phase]):
+    for bno, (inputs, vid_path, stroke, _, labels) in enumerate(dataloaders[phase]):
         # inputs of shape BATCH x SEQ_LEN x FEATURE_DIM
-        labels = attn_utils.get_batch_labels(vid_path, stroke, labs_keys, labs_values, 1)
+        seq = inputs.shape[1]
+        labels = attn_utils.get_batch_labels(vid_path, stroke, labs_keys, labs_values, seq)
         inputs = inputs.float()
         inp_emb = attn_utils.get_long_tensor(inputs)    # comment out for SA
         inputs = inp_emb.to(device)                     # comment out for SA
-        targets = attn_utils.get_long_tensor(targets).to(device)
         inputs = inputs.t().contiguous()
-        targets = targets.t().contiguous().view(-1)
-#        labels = labels.to(device)
+        labels = labels.to(device)
         
         # forward
         with torch.set_grad_enabled(phase == 'train'):
             outputs = model(inputs)     # output size (BATCH, SEQ_SIZE, NCLUSTERS)
+            outputs = outputs.permute(1, 0, 2).contiguous()
+            outputs = F.softmax(outputs.view(-1, outputs.shape[-1]), dim=1)
+
             gt_list.append(labels.tolist())
             pred_list.append((torch.max(outputs, 1)[1]).tolist())
             for i, vid in enumerate(vid_path):
-                stroke_ids.extend([vid+"_"+str(stroke[0][i].item())+"_"+str(stroke[1][i].item())] * 1)
+                stroke_ids.extend([vid+"_"+str(stroke[0][i].item())+"_"+str(stroke[1][i].item())] * seq)
                 
 #    epoch_loss = running_loss #/ len(dataloaders[phase].dataset)
 #            epoch_acc = running_corrects.double() / len(dataloaders[phase].dataset)
@@ -213,7 +202,7 @@ def predict(features, stroke_names_id, model, dataloaders, labs_keys, labs_value
     
     ###########################################################################
     
-    confusion_mat = np.zeros((model.n_classes, model.n_classes))
+    confusion_mat = np.zeros((model.decoder.out_features, model.decoder.out_features))
     gt_list = [g for batch_list in gt_list for g in batch_list]
     pred_list = [p for batch_list in pred_list for p in batch_list]
     
@@ -282,153 +271,6 @@ def load_weights(base_name, model, ep, opt):
         print("Loading Transformer weights... : {}".format(model_name))
     return model
 
-def extract_trans_feats(model, DATASET, LABELS, CLASS_IDS, BATCH_SIZE, 
-                       SEQ_SIZE=16, STEP=16, partition='train', nstrokes=-1, base_name=""):
-    '''
-    Extract sequence features from AutoEncoder.
-    
-    Parameters:
-    -----------
-    model : tt.TransformerModel 
-        TransformerModel object
-    DATASET : str
-        path to the video dataset
-    LABELS : str
-        path containing stroke labels
-    BATCH_SIZE : int
-        size for batch of clips
-    SEQ_SIZE : int
-        no. of frames in a clip
-    STEP : int
-        stride for next example. If SEQ_SIZE=16, STEP=8, use frames (0, 15), (8, 23) ...
-    partition : str
-        'train' / 'test' / 'val' : Videos to be considered
-    nstrokes : int
-        partial extraction of features (do not execute for entire dataset)
-    base_name : str
-        path containing the pickled feature dumps
-    
-    Returns:
-    --------
-    features_dictionary, stroke_names
-    
-    '''
-    
-    ###########################################################################
-    # Read the strokes 
-    # Divide the highlight dataset files into training, validation and test sets
-    train_lst, val_lst, test_lst = autoenc_utils.split_dataset_files(DATASET)
-    print("No. of training videos : {}".format(len(train_lst)))
-    
-    #####################################################################
-    
-    if partition == 'train':
-        partition_lst = train_lst
-        ft_path = os.path.join(base_name, "C"+str(cluster_size)+"_train.pkl")
-    elif partition == 'val':
-        partition_lst = val_lst
-        ft_path = os.path.join(base_name, "C"+str(cluster_size)+"_val.pkl")
-    elif partition == 'test':
-        partition_lst = test_lst
-        ft_path = os.path.join(base_name, "C"+str(cluster_size)+"_test.pkl")
-    else:
-        print("Partition should be : train / val / test")
-        return
-    
-    ###########################################################################
-    # Create a Dataset
-    
-    part_dataset = StrokeFeatureSequenceDataset(ft_path, partition_lst, DATASET, LABELS, CLASS_IDS, 
-                                         frames_per_clip=SEQ_SIZE, extracted_frames_per_clip=2,
-                                         step_between_clips=STEP, train=True)
-    
-    data_loader = DataLoader(dataset=part_dataset, batch_size=BATCH_SIZE, shuffle=False)
-
-    ###########################################################################
-    # Validate / Evaluate
-    model.eval()
-    stroke_names = []
-    trajectories, stroke_traj = [], []
-    num_strokes = 0
-    prev_stroke = None
-    print("Total Batches : {} :: BATCH_SIZE : {}".format(data_loader.__len__(), BATCH_SIZE))
-    ###########################################################################
-    for bno, (inputs, vid_path, stroke, labels) in enumerate(data_loader):
-        # inputs of shape BATCH x SEQ_LEN x FEATURE_DIM
-        inputs = inputs.float()
-        inp_emb = attn_utils.get_long_tensor(inputs)    # comment out for SA
-        inputs = inp_emb.t().contiguous().to(device)    # comment out for SA
-        
-        # forward
-        # track history if only in train
-        with torch.set_grad_enabled(False):
-            
-            outputs = model.get_vec(inputs)  # output size (BATCH, SEQ_SIZE, NCLUSTERS)
-            outputs = outputs.transpose(0, 1).contiguous()
-#            output = output.view(-1, INPUT_SIZE)    # To (BATCH*SEQ_SIZE, NCLUSTERS)
-#            loss = criterion(output, targets)
-            
-#            batch_size = inputs.size(0)
-#            enc_h = encoder.init_hidden(batch_size)
-#            enc_out, h = encoder(inputs, enc_h)
-#            dec_h = h
-#            dec_in = torch.zeros(batch_size, inputs.size(2)).to(device)
-#            dec_out_lst = []
-#            target_length = inputs.size(1)      # assign SEQ_LEN as target length for now
-#            # run for each word of the sequence (use teacher forcing)
-#            for ti in range(target_length):
-#                dec_out, dec_h, dec_attn = decoder(dec_h, enc_out, dec_in)
-#                dec_out_lst.append(dec_out)
-#                dec_in = dec_out
-    
-#            outputs = torch.stack(dec_out_lst, dim=1)
-            
-        # convert to start frames and end frames from tensors to lists
-        stroke = [s.tolist() for s in stroke]
-        # outputs are the reconstructed features. Use compressed enc_out values(maybe wtd.).
-        inputs_lst, batch_stroke_names = autoenc_utils.separate_stroke_tensors(outputs, \
-                                                                    vid_path, stroke)
-        
-        # for sequence of features from batch segregated extracted features.
-        if bno == 0:
-            prev_stroke = batch_stroke_names[0]
-        
-        for enc_idx, enc_input in enumerate(inputs_lst):
-            # get no of sequences that can be extracted from enc_input tensor
-            nSeqs = enc_input.size(0)
-            if prev_stroke != batch_stroke_names[enc_idx]:
-                # append old stroke to trajectories
-                if len(stroke_traj) > 0:
-                    num_strokes += 1
-                    trajectories.append(stroke_traj)
-                    stroke_names.append(prev_stroke)
-                    stroke_traj = []
-            
-#            enc_output = model.encoder(enc_input.to(device))
-#            enc_output = enc_output.squeeze(axis=1).cpu().data.numpy()
-            enc_output = enc_input.cpu().data.numpy()
-            
-            # convert to [[[stroke1(size 32 each) ... ], [], ...], [ [], ... ]]
-            stroke_traj.extend([enc_output[i,j,:] for i in range(enc_output.shape[0]) \
-                                                for j in range(enc_output.shape[1])])
-            prev_stroke = batch_stroke_names[enc_idx]
-            
-        if nstrokes > -1 and num_strokes >= nstrokes:
-            break
-       
-    # for last batch only if extracted for full dataset
-    if len(stroke_traj) > 0 and nstrokes < 0:
-        trajectories.append(stroke_traj)
-        stroke_names.append(batch_stroke_names[-1])
-    
-    # convert to dictionary of features with keys as stroke names(with ext). 
-    features = {}
-    for i, t in enumerate(trajectories):
-        features[stroke_names[i]] = np.array(t)
-    
-#    trajectories, stroke_names = autoenc_utils.group_strokewise(trajectories, stroke_names)
-    
-    return features, stroke_names
 
 
 def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16, 
@@ -541,13 +383,13 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     
     # get labels
     labs_keys, labs_values = attn_utils.get_cluster_labels(ANNOTATION_FILE)
-#    # created weighted Sampler for class imbalance
-#    samples_weight = attn_utils.get_sample_weights(train_dataset, labs_keys, labs_values, 
-#                                                   train_lst)
-#    sampler = WeightedRandomSampler(samples_weight, len(samples_weight))
+    # created weighted Sampler for class imbalance
+    samples_weight = attn_utils.get_sample_weights(train_dataset, labs_keys, labs_values, 
+                                                   train_lst)
+    sampler = WeightedRandomSampler(samples_weight, len(samples_weight))
     
-    train_loader = DataLoader(dataset=train_dataset, batch_size=BATCH_SIZE, shuffle=True) 
-#                              sampler=sampler, worker_init_fn=np.random.seed(12))
+    train_loader = DataLoader(dataset=train_dataset, batch_size=BATCH_SIZE, #shuffle=True,
+                              sampler=sampler, worker_init_fn=np.random.seed(12))
     
     val_loader = DataLoader(dataset=val_dataset, batch_size=BATCH_SIZE, shuffle=False)
     
@@ -564,31 +406,50 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     nlayers = 2 # the number of nn.TransformerEncoderLayer in nn.TransformerEncoder
     nhead = 2 # the number of heads in the multiheadattention models
     dropout = 0.2 # the dropout value
-    model = tt.TransformerModel(ntokens, emsize, nhead, nhid, nlayers, dropout).to(device)
+    model = tt.TransformerModel(ntokens, emsize, nhead, nhid, nlayers, #num_classes, 
+                                dropout)
+    model = load_weights(model_path, model, N_EPOCHS, 
+                                    "S30"+"C"+str(cluster_size)+"_SGD")
+
+#    model = tt.TransformerModelClassifier(ntokens, emsize, nhead, nhid, nlayers, 
+#                                              num_classes, dropout)
     
-#    model = load_weights(log_path, model, N_EPOCHS, 
-#                                    "S"+str(SEQ_SIZE)+"C"+str(cluster_size)+"_SGD")
+    # copy the pretrained weights 
     
     # Setup the loss fxn
     criterion = nn.CrossEntropyLoss()
-    model = model.to(device)
-#    print("Params to learn:")
-    params_to_update = []
+
+    print("Param layers frozen:")
+#    params_to_update = []
     for name, param in model.named_parameters():
         if param.requires_grad == True:
-            params_to_update.append(param)
-            print("\t",name)
+            param.requires_grad = False
+            #params_to_update.append(param)
+#            print("\t", name)
     
-    # Observe that all parameters are being optimized
+    model.decoder = nn.Linear(model.ninp, num_classes)
+    initrange = 0.1
+    model.decoder.bias.data.zero_()
+    model.decoder.weight.data.uniform_(-initrange, initrange)
+
+    model = model.to(device)
+
+    print("Params to learn:")
+    for name, param in model.named_parameters():
+        if param.requires_grad == True:
+            print("\t", name)
+
+    
+#    # Observe that all parameters are being optimized
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 #    optimizer_ft = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
-    
-    # Decay LR by a factor of 0.1 every 7 epochs
+#    
+#    # Decay LR by a factor of 0.1 every 7 epochs
     scheduler = StepLR(optimizer, step_size=15, gamma=0.1)
     
 #    lr = 5.0 # learning rate
 #    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-#    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)    
+#    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
     ###########################################################################
     # Training the model    
     
@@ -600,7 +461,7 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     
     end = time.time()
     
-#    # save the best performing model
+    # save the best performing model
     save_model_checkpoint(log_path, model, N_EPOCHS, 
                                      "S"+str(SEQ_SIZE)+"C"+str(cluster_size)+"_SGD")
     # Load model checkpoints
@@ -611,50 +472,11 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
 
     ###########################################################################
     
-#    acc = predict(features_val, stroke_names_id_val, model, data_loaders, labs_keys, 
-#                  labs_values, SEQ_SIZE, phase='test')
+    acc = predict(features_val, stroke_names_id_val, model, data_loaders, labs_keys, 
+                  labs_values, SEQ_SIZE, phase='test')
     
     ###########################################################################
     
-    # Extract attention model features 
-    if not os.path.isfile(os.path.join(log_path, "trans_feats.pkl")):
-        if not os.path.exists(log_path):
-            os.makedirs(log_path)
-        #    # Extract Grid OF / HOOF features {mth = 2, and vary nbins}
-        print("Training extraction ... ")
-        feats_dict, stroke_names = extract_trans_feats(model, DATASET, LABELS, 
-                                                      CLASS_IDS, BATCH_SIZE, SEQ_SIZE, 
-                                                      SEQ_SIZE-1, partition='train', nstrokes=nstrokes, 
-                                                      base_name=log_path)
-
-        with open(os.path.join(log_path, "trans_feats.pkl"), "wb") as fp:
-            pickle.dump(feats_dict, fp)
-        with open(os.path.join(log_path, "trans_snames.pkl"), "wb") as fp:
-            pickle.dump(stroke_names, fp)
-            
-    if not os.path.isfile(os.path.join(log_path, "trans_feats_val.pkl")):
-        print("Validation extraction ....")
-        feats_dict_val, stroke_names_val = extract_trans_feats(model, DATASET, LABELS, 
-                                                      CLASS_IDS, BATCH_SIZE, SEQ_SIZE, 
-                                                      SEQ_SIZE-1, partition='val', nstrokes=nstrokes, 
-                                                      base_name=log_path)
-
-        with open(os.path.join(log_path, "trans_feats_val.pkl"), "wb") as fp:
-            pickle.dump(feats_dict_val, fp)
-        with open(os.path.join(log_path, "trans_snames_val.pkl"), "wb") as fp:
-            pickle.dump(stroke_names_val, fp)
-    
-    if not os.path.isfile(os.path.join(log_path, "trans_feats_test.pkl")):
-        print("Testing extraction ....")
-        feats_dict_val, stroke_names_val = extract_trans_feats(model, DATASET, LABELS, 
-                                                      CLASS_IDS, BATCH_SIZE, SEQ_SIZE, 
-                                                      SEQ_SIZE-1, partition='test', nstrokes=nstrokes, 
-                                                      base_name=log_path)
-
-        with open(os.path.join(log_path, "trans_feats_test.pkl"), "wb") as fp:
-            pickle.dump(feats_dict_val, fp)
-        with open(os.path.join(log_path, "trans_snames_test.pkl"), "wb") as fp:
-            pickle.dump(stroke_names_val, fp)
             
     # call count_paramters(model)  for displaying total no. of parameters
     print("#Parameters : {} ".format(autoenc_utils.count_parameters(model)))
@@ -668,7 +490,7 @@ if __name__ == '__main__':
     CLASS_IDS = "/home/arpan/VisionWorkspace/Cricket/cluster_strokes/configs/Class Index_Strokes.txt"    
     ANNOTATION_FILE = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/shots_classes.txt"
 
-    seq_sizes = range(30, 31, 2)
+    seq_sizes = range(2, 41, 2)
     STEP = 1
     BATCH_SIZE = 32
     N_EPOCHS = 30
@@ -687,3 +509,4 @@ if __name__ == '__main__':
     print("*"*60)
     print("SEQ_SIZES : {}".format(seq_sizes))
     print("Accuracy values : {}".format(acc))
+

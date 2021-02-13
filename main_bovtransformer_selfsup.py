@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Tue Sept 28 10:39:42 2020
+Created on Fri Feb 5 10:39:42 2021
 
 @author: arpan
 
-@Description: Training Transformer model on BoV sequences.
+@Description: Training Transformer model on BoV SA sequences using self supervised 
+learning and contrastive loss. Positive pair samples are generated using future 
+context and negative pair samples are taken from two different strokes.
 """
 
 import os
@@ -19,21 +21,21 @@ import torch
 from torch import nn, optim
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
-#from torch.utils.data import WeightedRandomSampler
+import torch.nn.functional as F
 
 from utils import autoenc_utils
-#import datasets.videotransforms as videotransforms
 from datasets.dataset import StrokeFeatureSequenceDataset
-from datasets.dataset import StrokeFeaturePairsDataset
+from datasets.dataset_selfsupervised import StrokeFeaturePairsDataset
+from models.contrastive import ContrastiveLoss
 import copy
 import time
 import pickle
 #import attn_model
-import model_transformer as tt
+#import model_transformer as tt
+import siamese_net
 import attn_utils
-from collections import Counter
 from create_bovw import make_codebook
-from create_bovw import create_bovw_onehot
+from create_bovw import create_bovw_SA
 import warnings
 
 np.seterr(divide='ignore', invalid='ignore')
@@ -49,34 +51,16 @@ feat, feat_val, feat_test = "of_feats_grid20.pkl", "of_feats_val_grid20.pkl", "o
 # "of_snames_grid20.pkl" ; "2dcnn_snames_train.pkl" ; "3dcnn_snames_train.pkl";
 # "hoof_snames_b20.pkl"
 snames, snames_val, snames_test = "of_snames_grid20.pkl", "of_snames_val_grid20.pkl", "of_snames_test_grid20.pkl"
-cluster_size = 1000
+cluster_size = 200
 INPUT_SIZE = cluster_size      # OFGRID: 576, 3DCNN: 512, 2DCNN: 2048
-HIDDEN_SIZE = 256
+HIDDEN_SIZE = 200
 N_LAYERS = 2
 bidirectional = True
 
 km_filename = "km_onehot"
-log_path = "logs/bovtrans_HA_of20_Hidden200_C1000_pretrained"
+log_path = "logs/bovtrans_selfsup/SA_of20_Hidden200_C200"
 # bow_HL_ofAng_grid20 ; bow_HL_2dres ; bow_HL_3dres_seq16; bow_HL_hoof_b20_mth2
 feat_path = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs/bow_HL_ofAng_grid20"
-
-#HIST_DIFFS = "/home/arpan/VisionWorkspace/Cricket/localization_gru/hist_diff_highlights_gray"
-#SBD_MODEL = "/home/arpan/VisionWorkspace/Cricket/scripts/supporting_files/sbd_model_RF_histDiffs_gray.pkl"
-#
-#def read_boundaries(vkeys, hist_diffs_path, sbd_model):
-#    # load the model
-#    model = joblib.load(sbd_model)
-#    boundaries = {}
-#    for k in vkeys:
-#        vidfile = k.rsplit('/', 1)[1]
-#        feature_file = os.path.join(hist_diffs_path, vidfile.rsplit('.', 1)[0]+'.npy')
-#        vfeat = np.load(feature_file)       # load feature
-#        vpreds = model.predict(vfeat)       # make prediction
-#        idx_preds = np.argwhere(vpreds)     # get indices where 1
-#        # convert to list of indices where +ve predictions
-#        vid_boundaries = idx_preds.reshape(idx_preds.shape[0]).tolist()
-#        boundaries[vidfile] = vid_boundaries
-#    return boundaries
 
 def extract_of_features(feat_path, dataset, labspath, train_lst, val_lst):
     
@@ -125,51 +109,56 @@ def train_model(features, stroke_names_id, model, dataloaders, criterion,
             running_loss = 0.0
             running_corrects = 0.0
             # Iterate over data.
-            for bno, (inputs, vid_path, stroke, targets, _) in enumerate(dataloaders[phase]):
+            for bno, (x1, x2, vid_path1, stroke1, vid_path2, stroke2, labels) in enumerate(dataloaders[phase]):
                 # inputs of shape BATCH x SEQ_LEN x FEATURE_DIM
-#                labels = attn_utils.get_batch_labels(vid_path, stroke, labs_keys, labs_values, 1)
+#                labels = attn_utils.get_batch_labels(vid_path1, stroke1, labs_keys, labs_values, x1.shape[1])
+                labels = [lab for lab in labels.tolist() for i in range(x1.shape[1])]
                 # Extract spatio-temporal features from clip using 3D ResNet (For SL >= 16)
-                inputs = inputs.float()
-                inp_emb = attn_utils.get_long_tensor(inputs)    # comment out for SA
-                inputs = inp_emb.to(device)                     # comment out for SA
-                targets = attn_utils.get_long_tensor(targets).to(device)
-                inputs = inputs.t().contiguous()       # Convert to (SEQ, BATCH)
-                targets = targets.t().contiguous().view(-1)
+                x1, x2 = x1.float(), x2.float()
+                x1 = x1.permute(1, 0, 2).contiguous().to(device)
+                x2 = x2.permute(1, 0, 2).contiguous().to(device)
+                labels = torch.FloatTensor(labels).to(device)
                 
                 # zero the parameter gradients
                 optimizer.zero_grad()
                 # forward
-                output = model(inputs)  # output size (SEQ_SIZE, BATCH, NCLUSTERS)
-                output = output.view(-1, INPUT_SIZE)    # To (BATCH*SEQ_SIZE, NCLUSTERS)
-                loss = criterion(output, targets)
+                output1, output2 = model(x1, x2)  # output size (SEQ_SIZE, BATCH, NCLUSTERS)
+                output1 = output1.view(-1, output1.shape[-1])
+#                output2 = F.softmax(output2.view(-1, output2.shape[-1]), dim=1)
+                output2 = output2.view(-1, output2.shape[-1])
+                loss = criterion(output1, output2, labels)
+#                train_loss.append(loss.item())
+
+#                output = output.view(-1, INPUT_SIZE)    # To (BATCH*SEQ_SIZE, NCLUSTERS)
+#                loss = criterion(output1, labels.view(-1, labels.shape[-1]))
                 # backward + optimize only if in training phase
                 if phase == 'train':
                     loss.backward()
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+#                    torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
                     optimizer.step()
                 
-                # track history if only in train
-                _, preds = torch.max(output, 1)
+#                # track history if only in train
+#                _, preds = torch.max(output, 1)
 
                 # statistics
                 running_loss += loss.item()  #* inputs.size(0)
 #                print("Iter : {} :: Running Loss : {}".format(bno, running_loss))
-                running_corrects += torch.sum(preds == targets.data)
+#                running_corrects += torch.sum(preds == targets.data)
 #                if bno==20:
 #                    break
 
-            epoch_loss = running_loss / len(dataloaders[phase].dataset)
-            epoch_acc = running_corrects.double() / (inputs.size(0) * len(dataloaders[phase].dataset))
+            epoch_loss = running_loss #/ len(dataloaders[phase].dataset)
+#            epoch_acc = running_corrects.double() / (inputs.size(0) * len(dataloaders[phase].dataset))
 
-            print('{} Loss: {:.4f} Acc: {:.4f} LR: {}'.format(phase, epoch_loss, epoch_acc, 
+            print('{} Loss: {:.4f} LR: {}'.format(phase, epoch_loss,  
                   scheduler.get_lr()[0]))
 
             if phase == 'train':
                 scheduler.step()
-#            # deep copy the model for best test accuracy
-            if phase == 'test' and epoch_acc > best_acc:
-                best_acc = epoch_acc
-                best_model_wts = copy.deepcopy(model.state_dict())
+##            # deep copy the model for best test accuracy
+#            if phase == 'test' and epoch_acc > best_acc:
+#                best_acc = epoch_acc
+#                best_model_wts = copy.deepcopy(model.state_dict())
 
         print()
         
@@ -178,88 +167,10 @@ def train_model(features, stroke_names_id, model, dataloaders, criterion,
           time_elapsed % 60))
     print('Best val Acc: {:4f}'.format(best_acc))
 
-    # load best model weights
-    model.load_state_dict(best_model_wts)
+#    # load best model weights
+#    model.load_state_dict(best_model_wts)
     return model
 
-def predict(features, stroke_names_id, model, dataloaders, labs_keys, labs_values, 
-            seq, phase="val"):
-    assert phase == "val" or phase=="test", "Incorrect Phase."
-    model = model.eval()
-    gt_list, pred_list, stroke_ids  = [], [], []
-    # Iterate over data.
-    for bno, (inputs, vid_path, stroke, targets, labels) in enumerate(dataloaders[phase]):
-        # inputs of shape BATCH x SEQ_LEN x FEATURE_DIM
-        labels = attn_utils.get_batch_labels(vid_path, stroke, labs_keys, labs_values, 1)
-        inputs = inputs.float()
-        inp_emb = attn_utils.get_long_tensor(inputs)    # comment out for SA
-        inputs = inp_emb.to(device)                     # comment out for SA
-        targets = attn_utils.get_long_tensor(targets).to(device)
-        inputs = inputs.t().contiguous()
-        targets = targets.t().contiguous().view(-1)
-#        labels = labels.to(device)
-        
-        # forward
-        with torch.set_grad_enabled(phase == 'train'):
-            outputs = model(inputs)     # output size (BATCH, SEQ_SIZE, NCLUSTERS)
-            gt_list.append(labels.tolist())
-            pred_list.append((torch.max(outputs, 1)[1]).tolist())
-            for i, vid in enumerate(vid_path):
-                stroke_ids.extend([vid+"_"+str(stroke[0][i].item())+"_"+str(stroke[1][i].item())] * 1)
-                
-#    epoch_loss = running_loss #/ len(dataloaders[phase].dataset)
-#            epoch_acc = running_corrects.double() / len(dataloaders[phase].dataset)
-#    print('{} Loss: {:.4f}'.format(phase, epoch_loss))
-    
-    ###########################################################################
-    
-    confusion_mat = np.zeros((model.n_classes, model.n_classes))
-    gt_list = [g for batch_list in gt_list for g in batch_list]
-    pred_list = [p for batch_list in pred_list for p in batch_list]
-    
-    predictions = {"gt": gt_list, "pred": pred_list}
-    
-    # Save prediction and ground truth labels
-    with open(os.path.join(log_path, "preds_Seq"+str(seq)+"_C"+str(cluster_size)+".pkl"), "wb") as fp:
-        pickle.dump(predictions, fp)
-    with open(os.path.join(log_path, "preds_Seq"+str(seq)+"_C"+str(cluster_size)+".pkl"), "rb") as fp:
-        predictions = pickle.load(fp)
-    gt_list = predictions['gt']
-    pred_list = predictions['pred']
-    
-#    # get boundaries (worse accuracy when used)
-#    vkeys = list(set([v.rsplit('_', 2)[0] for v in stroke_ids]))
-#    boundaries = read_boundaries(vkeys, HIST_DIFFS, SBD_MODEL)
-    #
-    
-    prev_gt = stroke_ids[0]
-    val_labels, pred_labels, vid_preds = [], [], []
-    for i, pr in enumerate(pred_list):
-        if prev_gt != stroke_ids[i]:
-            # find max category predicted in pred_labels
-            val_labels.append(gt_list[i-1])
-            pred_labels.append(max(set(vid_preds), key = vid_preds.count))
-            vid_preds = []
-            prev_gt = stroke_ids[i]
-        vid_preds.append(pr)
-        
-    val_labels.append(gt_list[-1])
-    pred_labels.append(max(set(vid_preds), key = vid_preds.count))
-    
-    ###########################################################################
-    
-    correct = 0
-    for i,true_val in enumerate(val_labels):
-        if pred_labels[i] == true_val:
-            correct+=1
-        confusion_mat[pred_labels[i], true_val]+=1
-    print('#'*30)
-    print("GRU Sequence Classification Results:")
-    print("%d/%d Correct" % (correct, len(pred_labels)))
-    print("Accuracy = {} ".format( float(correct) / len(pred_labels)))
-    print("Confusion matrix")
-    print(confusion_mat)
-    return (float(correct) / len(pred_labels))
     
 def save_model_checkpoint(base_name, model, ep, opt):
     """
@@ -356,32 +267,16 @@ def extract_trans_feats(model, DATASET, LABELS, CLASS_IDS, BATCH_SIZE,
     for bno, (inputs, vid_path, stroke, labels) in enumerate(data_loader):
         # inputs of shape BATCH x SEQ_LEN x FEATURE_DIM
         inputs = inputs.float()
-        inp_emb = attn_utils.get_long_tensor(inputs)    # comment out for SA
-        inputs = inp_emb.t().contiguous().to(device)    # comment out for SA
-        
+#        inp_emb = attn_utils.get_long_tensor(inputs)    # comment out for SA
+#        inputs = inp_emb.t().contiguous().to(device)    # comment out for SA
+        inputs = inputs.permute(1, 0, 2).contiguous().to(device)
+
         # forward
         # track history if only in train
         with torch.set_grad_enabled(False):
             
-            outputs = model.get_vec(inputs)  # output size (BATCH, SEQ_SIZE, NCLUSTERS)
+            outputs = model.transformer.get_vec(inputs)  # output size (BATCH, SEQ_SIZE, NCLUSTERS)
             outputs = outputs.transpose(0, 1).contiguous()
-#            output = output.view(-1, INPUT_SIZE)    # To (BATCH*SEQ_SIZE, NCLUSTERS)
-#            loss = criterion(output, targets)
-            
-#            batch_size = inputs.size(0)
-#            enc_h = encoder.init_hidden(batch_size)
-#            enc_out, h = encoder(inputs, enc_h)
-#            dec_h = h
-#            dec_in = torch.zeros(batch_size, inputs.size(2)).to(device)
-#            dec_out_lst = []
-#            target_length = inputs.size(1)      # assign SEQ_LEN as target length for now
-#            # run for each word of the sequence (use teacher forcing)
-#            for ti in range(target_length):
-#                dec_out, dec_h, dec_attn = decoder(dec_h, enc_out, dec_in)
-#                dec_out_lst.append(dec_out)
-#                dec_in = dec_out
-    
-#            outputs = torch.stack(dec_out_lst, dim=1)
             
         # convert to start frames and end frames from tensors to lists
         stroke = [s.tolist() for s in stroke]
@@ -500,7 +395,7 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
         km_model = pickle.load(open(km_filepath+"_C"+str(cluster_size)+".pkl", 'rb'))
         
     print("Create numpy one hot representation for train features...")
-    onehot_feats = create_bovw_onehot(features, stroke_names_id, km_model)
+    onehot_feats = create_bovw_SA(features, stroke_names_id, km_model)
     
     ft_path = os.path.join(log_path, "C"+str(cluster_size)+"_train.pkl")
     with open(ft_path, "wb") as fp:
@@ -512,7 +407,7 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
                                                               snames_val)
     
     print("Create numpy one hot representation for val features...")
-    onehot_feats_val = create_bovw_onehot(features_val, stroke_names_id_val, km_model)
+    onehot_feats_val = create_bovw_SA(features_val, stroke_names_id_val, km_model)
     
     ft_path_val = os.path.join(log_path, "C"+str(cluster_size)+"_val.pkl")
     with open(ft_path_val, "wb") as fp:
@@ -524,7 +419,7 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
                                                                 snames_test)
     
     print("Create numpy one hot representation for test features...")
-    onehot_feats_test = create_bovw_onehot(features_test, stroke_names_id_test, km_model)
+    onehot_feats_test = create_bovw_SA(features_test, stroke_names_id_test, km_model)
     
     ft_path_test = os.path.join(log_path, "C"+str(cluster_size)+"_test.pkl")
     with open(ft_path_test, "wb") as fp:
@@ -564,13 +459,14 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     nlayers = 2 # the number of nn.TransformerEncoderLayer in nn.TransformerEncoder
     nhead = 2 # the number of heads in the multiheadattention models
     dropout = 0.2 # the dropout value
-    model = tt.TransformerModel(ntokens, emsize, nhead, nhid, nlayers, dropout).to(device)
-    
-#    model = load_weights(log_path, model, N_EPOCHS, 
-#                                    "S"+str(SEQ_SIZE)+"C"+str(cluster_size)+"_SGD")
+#    model = tt.TransformerModelSA(ntokens, emsize, nhead, nhid, nlayers, dropout).to(device)
+    model = siamese_net.SiameseTransformerSANet(ntokens, emsize, nhead, nhid, nlayers, dropout).to(device)
     
     # Setup the loss fxn
-    criterion = nn.CrossEntropyLoss()
+#    criterion = nn.CrossEntropyLoss()
+#    criterion = nn.MSELoss()
+    criterion = ContrastiveLoss()
+    
     model = model.to(device)
 #    print("Params to learn:")
     params_to_update = []
@@ -581,38 +477,35 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     
     # Observe that all parameters are being optimized
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-#    optimizer_ft = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
+#    optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
     
     # Decay LR by a factor of 0.1 every 7 epochs
-    scheduler = StepLR(optimizer, step_size=15, gamma=0.1)
+    scheduler = StepLR(optimizer, step_size=20, gamma=0.1)
     
 #    lr = 5.0 # learning rate
 #    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-#    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)    
+#    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 2.0, gamma=0.95)    
     ###########################################################################
-    # Training the model    
-    
-    start = time.time()
-    
-    model = train_model(features, stroke_names_id, model, data_loaders, criterion, 
-                        optimizer, scheduler, labs_keys, labs_values,
-                        num_epochs=N_EPOCHS)
-    
-    end = time.time()
-    
-#    # save the best performing model
-    save_model_checkpoint(log_path, model, N_EPOCHS, 
-                                     "S"+str(SEQ_SIZE)+"C"+str(cluster_size)+"_SGD")
+#    # Training the model    
+#    
+#    start = time.time()
+#    
+#    model = train_model(features, stroke_names_id, model, data_loaders, criterion, 
+#                        optimizer, scheduler, labs_keys, labs_values,
+#                        num_epochs=N_EPOCHS)
+#    
+#    end = time.time()
+#    
+##    # save the best performing model
+#    save_model_checkpoint(log_path, model, N_EPOCHS, 
+#                                     "S"+str(SEQ_SIZE)+"C"+str(cluster_size)+"_SGD")
     # Load model checkpoints
     model = load_weights(log_path, model, N_EPOCHS, 
                                     "S"+str(SEQ_SIZE)+"C"+str(cluster_size)+"_SGD")
     
-    print("Total Execution time for {} epoch : {}".format(N_EPOCHS, (end-start)))
+#    print("Total Execution time for {} epoch : {}".format(N_EPOCHS, (end-start)))
 
     ###########################################################################
-    
-#    acc = predict(features_val, stroke_names_id_val, model, data_loaders, labs_keys, 
-#                  labs_values, SEQ_SIZE, phase='test')
     
     ###########################################################################
     
@@ -670,13 +563,13 @@ if __name__ == '__main__':
 
     seq_sizes = range(30, 31, 2)
     STEP = 1
-    BATCH_SIZE = 32
-    N_EPOCHS = 30
+    BATCH_SIZE = 64
+    N_EPOCHS = 60
     
     attn_utils.seed_everything(1234)
     acc = []
 
-    print("OF20 BOV Transformer HA with Embedding...")
+    print("OF20 BOV Transformer SA without Embedding...")
     print("EPOCHS = {} : HIDDEN_SIZE = {} : LAYERS = {}".format(N_EPOCHS, 
           HIDDEN_SIZE, N_LAYERS))
     for SEQ_SIZE in seq_sizes:

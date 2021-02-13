@@ -393,22 +393,22 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
 #    optimizer_ft = optim.SGD(params_to_update, lr=0.001, momentum=0.9)
         
     ###########################################################################
-    # Training the model
-    start = time.time()
-    
-    model = train_model(model, data_loaders, criterion, optimizer_ft,
-                        lr_scheduler, labs_keys, labs_values, seq=8,
-                        num_epochs=N_EPOCHS)
-    
-    end = time.time()
-    
-    print("Total Execution time for {} epoch : {}".format(N_EPOCHS, (end-start)))
+#    # Training the model
+#    start = time.time()
+#    
+#    model = train_model(model, data_loaders, criterion, optimizer_ft,
+#                        lr_scheduler, labs_keys, labs_values, seq=8,
+#                        num_epochs=N_EPOCHS)
+#    
+#    end = time.time()
+#    
+#    print("Total Execution time for {} epoch : {}".format(N_EPOCHS, (end-start)))
     ###########################################################################    
     # Save only the model params
     model_name = os.path.join(base_name, "conv_vae_ep"+str(N_EPOCHS)+"_SGD.pt")
 
-    torch.save(model.state_dict(), model_name)
-    print("Model saved to disk... : {}".format(model_name))    # Load model checkpoints
+#    torch.save(model.state_dict(), model_name)
+#    print("Model saved to disk... : {}".format(model_name))    # Load model checkpoints
     
     # Loading the saved model 
     model_name = os.path.join(base_name, "conv_vae_ep"+str(N_EPOCHS)+"_SGD.pt")
