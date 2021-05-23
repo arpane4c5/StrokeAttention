@@ -106,7 +106,7 @@ class TransformerModelSA(nn.Module):
         self.encoder = nn.Linear(ntoken, ninp)
         self.ninp = ninp
         self.decoder = nn.Linear(ninp, ntoken)
-        self.fc = nn.Linear(ntoken, 2)
+#        self.fc = nn.Linear(ntoken, ntoken)
         self.init_weights()
 
     def _generate_square_subsequent_mask(self, sz):
@@ -116,12 +116,12 @@ class TransformerModelSA(nn.Module):
 
     def init_weights(self):
         initrange = 0.1
-        self.encoder.bias.data.zero_()
+#        self.encoder.bias.data.zero_()
         self.encoder.weight.data.uniform_(-initrange, initrange)
         self.decoder.bias.data.zero_()
         self.decoder.weight.data.uniform_(-initrange, initrange)
-        self.fc.bias.data.zero_()
-        self.fc.weight.data.uniform_(-initrange, initrange)
+#        self.fc.bias.data.zero_()
+#        self.fc.weight.data.uniform_(-initrange, initrange)
 
     def forward(self, src):
         if self.src_mask is None or self.src_mask.size(0) != len(src):
@@ -133,7 +133,7 @@ class TransformerModelSA(nn.Module):
         src = self.pos_encoder(src)
         output = self.transformer_encoder(src, self.src_mask)
         output = self.decoder(output)
-        output = self.fc(output)
+#        output = self.fc(output)
         return output
     
     def get_vec(self, src):

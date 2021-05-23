@@ -57,7 +57,7 @@ N_LAYERS = 2
 bidirectional = True
 
 km_filename = "km_onehot"
-log_path = "logs/bovtransDown_HA_of20_Hidden200_AdamPre_C"+str(cluster_size)
+log_path = "logs/bovtransDown_8C_HA_of20_Hidden200_AdamPre_C"+str(cluster_size)
 model_path = "logs/bovtrans_HA_of20_Hidden200_pretrained/"#transformer_ep30_S30C300_SGD.pt"
 # bow_HL_ofAng_grid20 ; bow_HL_2dres ; bow_HL_3dres_seq16; bow_HL_hoof_b20_mth2
 feat_path = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs/bow_HL_ofAng_grid20"
@@ -488,9 +488,10 @@ if __name__ == '__main__':
     LABELS = "/home/arpan/VisionWorkspace/Cricket/scripts/supporting_files/sample_set_labels/sample_labels_shots/ICC WT20"
     DATASET = "/home/arpan/VisionWorkspace/VideoData/sample_cricket/ICC WT20"
     CLASS_IDS = "/home/arpan/VisionWorkspace/Cricket/cluster_strokes/configs/Class Index_Strokes.txt"    
-    ANNOTATION_FILE = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/shots_classes.txt"
+#    ANNOTATION_FILE = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/shots_classes.txt"
+    ANNOTATION_FILE = "/home/arpan/VisionWorkspace/Cricket/stroke_recognition/config/stroke_types_classes.txt"
 
-    seq_sizes = range(2, 41, 2)
+    seq_sizes = range(38, 39, 2)
     STEP = 1
     BATCH_SIZE = 32
     N_EPOCHS = 30

@@ -322,7 +322,7 @@ def create_bovw_SA(features, strokes_name_id, model):
                         for i in range(stroke_feats.shape[0])]
             # form nFeats x nClusters (distance of a feature from all the cluster centers)
             cl_dists = np.vstack(cl_dists)      # unnormalized
-#            cl_dists = normalize(cl_dists**2, axis=1, norm="l2")   # accuracy decreases 
+#            cl_dists = normalize(cl_dists, "l2") #**2, axis=1, norm="l2")   # accuracy decreases 
         else:
             cl_dists = model.predict_proba(stroke_feats)
         

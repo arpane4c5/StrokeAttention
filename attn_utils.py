@@ -15,7 +15,7 @@ import os
 import pickle
 import random
 from datasets.dataset import CricketStrokesDataset
-
+from datasets.dataset_localfeats import LocalFeatureSequencesDataset
 
 def seed_everything(seed=1234):
     random.seed(seed)
@@ -192,6 +192,7 @@ def get_sample_weights(train_dataset, labs_keys, labs_values, train_lst):
         label = labs_values[labs_keys.index(key)]
         train_set_keys.append(key)
         sample_counts[label] +=1
+#        print("{} / {}".format(i, train_dataset.__len__()))
             
     # calculate the weights for each class
     weights = 1./np.array(sample_counts)
@@ -205,6 +206,60 @@ def get_sample_weights(train_dataset, labs_keys, labs_values, train_lst):
     sample_weights = sample_weights.double()
     return sample_weights
 
+def get_localFeats_sample_weights(train_dataset, labs_keys, labs_values, train_lst):
+    train_lst = [t.rsplit('.', 1)[0] for t in train_lst]
+    n_classes = len(list(set(labs_values)))
+    train_keys, train_values = [], []
+    sample_counts = [0.] * n_classes
+    for i, key in enumerate(labs_keys):
+        if '/' in key:
+            key = key.rsplit('/', 1)[1]
+        k = key.rsplit('_', 2)[0].rsplit('.', 1)[0]
+        if k in train_lst:
+            train_keys.append(key)
+            train_values.append(labs_values[i])
+            
+    train_set_keys = []
+    # count the number of samples for each class
+    for i in range(train_dataset.__len__()):
+        if isinstance(train_dataset, LocalFeatureSequencesDataset):
+            _, key, *_ = train_dataset.__getitem__(i)
+        label = labs_values[labs_keys.index(key)]
+        train_set_keys.append(key)
+        sample_counts[label] +=1
+#        print("{} / {}".format(i, train_dataset.__len__()))
+            
+    # calculate the weights for each class
+    weights = 1./np.array(sample_counts)
+    sample_weights = [0.] * train_dataset.__len__()
+    # assign the weights for each sample for creation of a sampler
+    for i, key in enumerate(train_set_keys):
+        label = labs_values[labs_keys.index(key)]
+        sample_weights[i] = weights[label]
+    
+    sample_weights = torch.from_numpy(np.array(sample_weights))
+    sample_weights = sample_weights.double()
+    return sample_weights    
+
+def get_combined_categories(labs_keys, labs_values, labs_keys_bat, labs_values_bat):
+    '''Generate 2*8 categories by combining the 8 stroke types with the 2 batsman
+    pose orientations. 
+    The labs_keys and labs_keys_bat should be in the same order.
+    '''
+    num_strokes = len(list(set(labs_values)))
+    num_poses = len(list(set(labs_values_bat)))
+    check_ordering = [labs_keys[i]==labs_keys_bat[i] for i in range(len(labs_keys))]
+    assert sum(check_ordering) == len(labs_keys), "Key ordering does not match."
+    assert num_poses == 2, "More than 2 categories for batsman poses."
+    keys, values = [], []
+    for i, k in enumerate(labs_keys):
+        keys.append(k)
+        if labs_values_bat[i] == 0:
+            values.append(labs_values[i])
+        else:
+            values.append(num_strokes + labs_values[i])
+            
+    return keys, values
 
 #def predict_videowise(features, stroke_names_id, model, dataloaders, labs_keys, labs_values, 
 #            phase="val"):

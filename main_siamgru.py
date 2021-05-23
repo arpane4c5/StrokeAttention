@@ -23,10 +23,11 @@ from torch.utils.data import DataLoader
 from utils import autoenc_utils
 #import datasets.videotransforms as videotransforms
 from datasets.dataset import StrokeFeatureSequenceDataset
-from datasets.dataset_selfsupervised import StrokeFeaturePairsDataset
-from models.contrastive import ContrastiveLoss
+from datasets.dataset_selfsupervised import StrokeFeaturePairsDatasetv2
+from models.contrastive import ContrastiveMSELoss
 import time
 import pickle
+import copy
 #import attn_model
 #import conv_selfexp_model as mod
 #import attn_model
@@ -47,7 +48,7 @@ N_LAYERS = 2
 bidirectional = True
 
 km_filename = "km_onehot"
-log_path = "logs/bov_selfsup/of20_Hidden"+str(HIDDEN_SIZE)
+log_path = "logs/bov_selfsup/dynMargin_of20_Hidden"+str(HIDDEN_SIZE)
 # bow_HL_ofAng_grid20 ; bow_HL_2dres ; bow_HL_3dres_seq16; bow_HL_hoof_b20_mth2
 feat_path = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs/bow_HL_ofAng_grid20"
 
@@ -56,8 +57,8 @@ def train_model(features, stroke_names_id, model, dataloaders, criterion,
                 optimizer, scheduler, labs_keys, labs_values, num_epochs=25):
     since = time.time()
 
-#    best_model_wts = copy.deepcopy(model.state_dict())
-#    best_acc = 0.0
+    best_model_wts = copy.deepcopy(model.state_dict())
+    best_loss = 999999
 
     for epoch in range(num_epochs):
         print('Epoch {}/{}'.format(epoch, num_epochs - 1))
@@ -118,20 +119,20 @@ def train_model(features, stroke_names_id, model, dataloaders, criterion,
 
             print('{} Loss: {:.4f} LR: {}'.format(phase, epoch_loss,  
                   scheduler.get_lr()[0]))
-##            # deep copy the model for best test accuracy
-#            if phase == 'test' and epoch_acc > best_acc:
-#                best_acc = epoch_acc
-#                best_model_wts = copy.deepcopy(model.state_dict())
+#            # deep copy the model for best test accuracy
+            if phase == 'test' and epoch_loss < best_loss:
+                best_loss = epoch_loss
+                best_model_wts = copy.deepcopy(model.state_dict())
 
         print()
         
     time_elapsed = time.time() - since
     print('Training complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, \
           time_elapsed % 60))
-#    print('Best val Acc: {:4f}'.format(best_acc))
+    print('Best val loss: {:4f}'.format(best_loss))
 
-#    # load best model weights
-#    model.load_state_dict(best_model_wts)
+    # load best model weights
+    model.load_state_dict(best_model_wts)
     return model
 
 #def predict(features, stroke_names_id, model, dataloaders, labs_keys, labs_values, 
@@ -457,11 +458,11 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16, S
     ###########################################################################
     # Create a Dataset    
     ft_path = os.path.join(base_name, feat_path, feat)
-    train_dataset = StrokeFeaturePairsDataset(ft_path, train_lst, DATASET, LABELS, CLASS_IDS, 
+    train_dataset = StrokeFeaturePairsDatasetv2(ft_path, train_lst, DATASET, LABELS, CLASS_IDS, 
                                          frames_per_clip=SEQ_SIZE, extracted_frames_per_clip=2,
                                          step_between_clips=STEP, train=True)
     ft_path_val = os.path.join(base_name, feat_path, feat_val)
-    val_dataset = StrokeFeaturePairsDataset(ft_path_val, val_lst, DATASET, LABELS, CLASS_IDS, 
+    val_dataset = StrokeFeaturePairsDatasetv2(ft_path_val, val_lst, DATASET, LABELS, CLASS_IDS, 
                                          frames_per_clip=SEQ_SIZE, extracted_frames_per_clip=2,
                                          step_between_clips=STEP, train=False)
     
@@ -498,7 +499,9 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16, S
 #                                    "S"+str(SEQ_SIZE)+"C"+str(cluster_size)+"_SGD")
     
     # Setup the loss fxn
-    criterion = ContrastiveLoss()
+#    criterion = ManifoldContrastiveLoss(HIDDEN_SIZE, 0.5)
+#    criterion = ContrastiveLoss(1)
+    criterion = ContrastiveMSELoss()
     model = model.to(device)
 #    print("Params to learn:")
     params_to_update = []
@@ -508,7 +511,7 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16, S
             print("\t",name)
     
     # Observe that all parameters are being optimized
-#    optimizer_ft = torch.optim.Adam(model.parameters(), lr=0.001)
+#    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
     
     # Decay LR by a factor of 0.1 every 7 epochs
@@ -598,7 +601,7 @@ if __name__ == '__main__':
     
     base_path = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs"
     
-    seq_sizes = range(16, 17, 1)
+    seq_sizes = range(30, 31, 1)
     STEP = 1
     BATCH_SIZE = 32
     N_EPOCHS = 30

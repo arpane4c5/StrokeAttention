@@ -142,20 +142,21 @@ class ConvLSTMCell(nn.Module):
 
     def init_hidden(self, batch_size, hidden, shape):
         if self.Wci is None:
-            self.Wci = torch.zeros(1, hidden, shape[0], shape[1]).cuda()
-            self.Wcf = torch.zeros(1, hidden, shape[0], shape[1]).cuda()
-            self.Wco = torch.zeros(1, hidden, shape[0], shape[1]).cuda()
+            self.Wci = torch.zeros(1, hidden, shape[0], shape[1]).cuda(1)
+            self.Wcf = torch.zeros(1, hidden, shape[0], shape[1]).cuda(1)
+            self.Wco = torch.zeros(1, hidden, shape[0], shape[1]).cuda(1)
         else:
             assert shape[0] == self.Wci.size()[2], 'Input Height Mismatched!'
             assert shape[1] == self.Wci.size()[3], 'Input Width Mismatched!'
-        return (torch.zeros(batch_size, hidden, shape[0], shape[1]).cuda(),
-                torch.zeros(batch_size, hidden, shape[0], shape[1]).cuda())
+        return (torch.zeros(batch_size, hidden, shape[0], shape[1]).cuda(1),
+                torch.zeros(batch_size, hidden, shape[0], shape[1]).cuda(1))
 
 
 class ConvLSTM(nn.Module):
     # input_channels corresponds to the first input feature map
     # hidden state is a list of succeeding lstm layers.
-    def __init__(self, input_channels, hidden_channels, kernel_size, step=1, effective_step=[1]):
+    def __init__(self, input_channels, hidden_channels, kernel_size, num_classes, multiple=1,
+                 step=1, effective_step=[1]):
         super(ConvLSTM, self).__init__()
         self.input_channels = [input_channels] + hidden_channels
         self.hidden_channels = hidden_channels
@@ -163,6 +164,7 @@ class ConvLSTM(nn.Module):
         self.num_layers = len(hidden_channels)
         self.step = step
         self.effective_step = effective_step
+        self.num_classes = num_classes
         self._all_layers = []
         for i in range(self.num_layers):
             name = 'cell{}'.format(i)
@@ -175,7 +177,7 @@ class ConvLSTM(nn.Module):
         self.conv2 = nn.Conv2d(self.hidden_channels[-1], self.hidden_channels[-1], kernel_size=(3, 3), stride=2, padding=(1, 1))
         self.maxpool2 = nn.MaxPool2d(kernel_size = (2, 2), stride = (2, 2))
         self.relu = nn.ReLU()
-        self.fc1 = nn.Linear(self.hidden_channels[-1] * 2 * 2, 5)
+        self.fc1 = nn.Linear(self.hidden_channels[-1] * multiple * 2 * 2, num_classes)
         if torch.__version__.split('.')[0]=='1':
             self.softmax = nn.Softmax(dim = 1)
         else:
@@ -206,10 +208,11 @@ class ConvLSTM(nn.Module):
                 if step in self.effective_step:
                     outputs.append(x)
                     
-        h = self.relu(self.conv1(outputs[-1]))
-        h = self.maxpool1(h)
-        h = self.relu(self.conv2(h))
-        h = self.maxpool2(h)
+        # input h = (B, 32, 32, 32)
+        h = self.relu(self.conv1(outputs[-1]))  # B, 32, 16, 16
+        h = self.maxpool1(h)    # B, 32, 8, 8
+        h = self.relu(self.conv2(h))    # B, 32, 4, 4
+        h = self.maxpool2(h)    # B, 32, 2, 2
         out = self.fc1(h.view(h.size(0), -1))
         probs = self.softmax(out)
 

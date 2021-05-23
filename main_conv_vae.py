@@ -37,7 +37,7 @@ import conv_attn_model
 import conv_encdec_model
 import attn_utils
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 base_path = "/home/arpan/VisionWorkspace/Cricket/StrokeAttention/logs"
 #INPUT_SIZE, TARGET_SIZE = 576, 576      # OFGRID: 576, 3DCNN: 512, 2DCNN: 2048
 HIDDEN_SIZE = 128 #64#1024
@@ -84,19 +84,19 @@ def train_model(model, dataloaders, criterion, optimizer,
 
             running_loss = 0.0
 
-            # Iterate over data.
-            for bno, (inputs, vid_path, stroke, flow, labels) in enumerate(dataloaders[phase]):
+            # Iterate over data. or (inputs, vid_path, stroke, flow, labels)
+            for bno, (inputs, vid_path, stroke, labels) in enumerate(dataloaders[phase]):
                 # inputs of shape BATCH x SEQ_LEN x FEATURE_DIM
 #                print("Batch No : {} / {}".format(bno, len(dataloaders[phase])))
 #                labels = attn_utils.get_batch_labels(vid_path, stroke, labs_keys, labs_values, 1)
                 # Extract spatio-temporal features from clip using 3D ResNet (For SL >= 16)
                 inputs = inputs.permute(0, 2, 1, 3, 4).float()
                 inputs = inputs.to(device)
-                b, t, h, w, c = flow.shape
-                flow = torch.cat((torch.zeros(b, 1, h, w, c), flow), 1)
-                flow = flow.permute(0, 2, 1, 3, 4).float()
-#                flow = flow.permute(0, 4, 1, 2, 3)
-                flow = flow.to(device)
+#                b, t, c, h, w = flow.shape
+#                flow = torch.cat((torch.zeros(b, 1, c, h, w), flow), 1)
+#                flow = flow.permute(0, 2, 1, 3, 4).float()
+##                flow = flow.permute(0, 4, 1, 2, 3)
+#                flow = flow.to(device)
                 # zero the parameter gradients
                 optimizer.zero_grad()
 #                decoder_optimizer.zero_grad()
@@ -109,7 +109,7 @@ def train_model(model, dataloaders, criterion, optimizer,
 #                    enc_h = encoder._init_hidden(batch_size)
                     out, mu, logvar = model(inputs)
 #                    dec_out = decoder(enc_out)
-                    batch_loss = conv_encdec_model.loss_function(out, flow, mu, logvar)
+                    batch_loss = conv_encdec_model.loss_function(out, inputs, mu, logvar) # or (out, flow, mu, logvar)
 
 ###############################################################################
                     # backward + optimize only if in training phase
@@ -123,8 +123,8 @@ def train_model(model, dataloaders, criterion, optimizer,
 #                      len(dataloaders[phase]), running_loss))
                 
 #                print("Batch No : {} / {}".format(bno, len(dataloaders[phase])))
-                if (bno+1) % 50 == 0:
-                    break
+#                if (bno+1) % 50 == 0:
+#                    break
                     
             if phase == 'train':
                 scheduler.step()
@@ -340,14 +340,16 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
                                          videotransforms.Resize((112, 112)),
 #                                         videotransforms.RandomCrop(112), 
                                          videotransforms.ToTensor(), 
-#                                         videotransforms.Normalize(),
+                                         videotransforms.Normalize(),
                                         #videotransforms.RandomHorizontalFlip(),\
                                         ])
-    train_dataset = CricketStrokesFlowDataset(train_lst, DATASET, LABELS, CLASS_IDS, 
+    # or use CricketStrokesFlowDataset
+    train_dataset = CricketStrokesDataset(train_lst, DATASET, LABELS, CLASS_IDS, 
                                          frames_per_clip=SEQ_SIZE, step_between_clips=STEP, 
                                          train=True, framewiseTransform=False, 
                                          transform=clip_transform)
-    val_dataset = CricketStrokesFlowDataset(val_lst, DATASET, LABELS, CLASS_IDS, 
+    # or use CricketStrokesFlowDataset
+    val_dataset = CricketStrokesDataset(val_lst, DATASET, LABELS, CLASS_IDS, 
                                         frames_per_clip=SEQ_SIZE, step_between_clips=STEP, 
                                         train=False, framewiseTransform=False, 
                                         transform=clip_transform)
@@ -393,16 +395,16 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
 #    optimizer_ft = optim.SGD(params_to_update, lr=0.001, momentum=0.9)
         
     ###########################################################################
-#    # Training the model
-#    start = time.time()
-#    
-#    model = train_model(model, data_loaders, criterion, optimizer_ft,
-#                        lr_scheduler, labs_keys, labs_values, seq=8,
-#                        num_epochs=N_EPOCHS)
-#    
-#    end = time.time()
-#    
-#    print("Total Execution time for {} epoch : {}".format(N_EPOCHS, (end-start)))
+    # Training the model
+    start = time.time()
+    
+    model = train_model(model, data_loaders, criterion, optimizer_ft,
+                        lr_scheduler, labs_keys, labs_values, seq=8,
+                        num_epochs=N_EPOCHS)
+    
+    end = time.time()
+    
+    print("Total Execution time for {} epoch : {}".format(N_EPOCHS, (end-start)))
     ###########################################################################    
     # Save only the model params
     model_name = os.path.join(base_name, "conv_vae_ep"+str(N_EPOCHS)+"_SGD.pt")
@@ -468,10 +470,10 @@ if __name__ == '__main__':
 
     SEQ_SIZE = 8
     STEP = 4
-    BATCH_SIZE = 8
+    BATCH_SIZE = 128
     N_EPOCHS = 30
     
-    extract_path = os.path.join(base_path, "conv_vae_flowviz_seq"+str(SEQ_SIZE))
+    extract_path = os.path.join(base_path, "conv_vae_seq"+str(SEQ_SIZE))  # flowviz
     model =  main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE, 
                   STEP, nstrokes=-1, N_EPOCHS=N_EPOCHS, base_name=extract_path)
 

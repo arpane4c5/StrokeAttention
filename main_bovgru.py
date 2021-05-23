@@ -35,8 +35,8 @@ import attn_utils
 from collections import Counter
 from create_bovw import make_codebook
 from create_bovw import create_bovw_SA  #create_bovw_OMP   #
-from create_bovw import vis_cluster
-from sklearn.externals import joblib
+#from create_bovw import vis_cluster
+import joblib
 import warnings
 
 np.seterr(divide='ignore', invalid='ignore')
@@ -61,7 +61,7 @@ N_LAYERS = 2
 bidirectional = True
 
 km_filename = "km_onehot"
-log_path = "logs/bovgru_SA_of20_Hidden256_tmp"
+log_path = "logs_new_data/bovgru_SA_of20_Hidden256"
 # bow_HL_ofAng_grid20 ; bow_HL_2dres ; bow_HL_3dres_seq16; bow_HL_hoof_b20_mth2
 feat_path = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs/bow_HL_ofAng_grid20"
 
@@ -130,7 +130,7 @@ def train_model(features, stroke_names_id, model, dataloaders, criterion,
             running_loss = 0.0
             running_corrects = 0
             
-            count = [0.] * 5
+            count = [0.] * 8
 
             # Iterate over data.
             for bno, (inputs, vid_path, stroke, labels) in enumerate(dataloaders[phase]):
@@ -480,7 +480,8 @@ if __name__ == '__main__':
     LABELS = "/home/arpan/VisionWorkspace/Cricket/scripts/supporting_files/sample_set_labels/sample_labels_shots/ICC WT20"
     DATASET = "/home/arpan/VisionWorkspace/VideoData/sample_cricket/ICC WT20"
     CLASS_IDS = "/home/arpan/VisionWorkspace/Cricket/cluster_strokes/configs/Class Index_Strokes.txt"    
-    ANNOTATION_FILE = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/shots_classes.txt"
+#    ANNOTATION_FILE = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/shots_classes.txt"
+    ANNOTATION_FILE = "/home/arpan/VisionWorkspace/Cricket/stroke_recognition/config/stroke_types_classes.txt"
 
     seq_sizes = range(30, 31, 2)
     STEP = 1

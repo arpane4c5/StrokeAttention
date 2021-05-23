@@ -5,7 +5,7 @@ Created on Sun Jul 26 23:43:52 2020
 
 @author: arpan
 
-@Description: Train an Attention model on strokes
+@Description: Finetune a C3D model on strokes.
 """
 
 import os
@@ -39,16 +39,33 @@ import attn_utils
 #import model_c3d as c3d_pre
 import model_c3d_finetune as c3d
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda:2' if torch.cuda.is_available() else 'cpu')
 base_path = "/home/arpan/VisionWorkspace/Cricket/StrokeAttention/logs/c3dFine"
 wts_path = 'c3d.pickle'
 HIDDEN_SIZE = 1024 #64#1024
-            
+
+def vis_samples(dataset, normalize=False):
+#    import cv2
+    from matplotlib import pyplot as plt
+    inputs, *_ = dataset.__getitem__(456)
+    ch_means = torch.tensor([0.43216, 0.394666, 0.37645], dtype=torch.float32)
+    ch_std = torch.tensor([0.22803, 0.22145, 0.216989], dtype=torch.float32)
+    plt.figure()
+#    f, axarr = plt.subplots(4,4)
+    for i in range(inputs.shape[0]):
+        t = inputs[i]#*255
+        t = t.permute(1, 2, 0)
+#        t[:,:,[0, 2]] = t[:, :, [2, 0]]
+#        axarr[i][j].imshow(np.array(t, dtype=np.uint8))
+        if normalize:
+            t = (t*ch_std[None,None,:] + ch_means[None,None,:])
+        plt.imshow(np.array(t*255, dtype=np.uint8))
+        plt.savefig("visualize_samps{}.png".format(i)) #, bbox_inches='tight')
 
 def train_model(model, dataloaders, criterion, optimizer, scheduler, labs_keys, 
                 labs_values, num_epochs=25):
     since = time.time()
-
+#    vis_samples(dataloaders['test'].dataset, True)
 #    best_model_wts = copy.deepcopy(model.state_dict())
     best_acc = 0.0
 
@@ -107,25 +124,25 @@ def train_model(model, dataloaders, criterion, optimizer, scheduler, labs_keys,
             if phase == 'train':
                 scheduler.step()
 
-            epoch_loss = running_loss / (bno+1)    #len(dataloaders[phase].dataset)
-            epoch_acc = running_corrects.double() / (16*(bno+1)) #len(dataloaders[phase].dataset)  , *inputs.size(2)
+            epoch_loss = running_loss / (bno+1)  #len(dataloaders[phase].dataset) 
+            epoch_acc = running_corrects.double() / ((bno+1)*inputs.size(2))   #len(dataloaders[phase].dataset)
 
             print('{} Loss: {:.4f} :: Acc: {:.4f}'.format(phase, epoch_loss, epoch_acc))
 
-#            # deep copy the model
-#            if phase == 'test' and epoch_acc >= best_acc:
-#                best_acc = epoch_acc
-#                best_model_wts = copy.deepcopy(model.state_dict())
+            # deep copy the model
+            if phase == 'test' and epoch_acc >= best_acc:
+                best_acc = epoch_acc
+                best_model_wts = copy.deepcopy(model.state_dict())
 
         print()
 
     time_elapsed = time.time() - since
     print('Training complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, \
           time_elapsed % 60))
-#    print('Best val Acc: {:4f}'.format(best_acc))
+    print('Best val Acc: {:4f}'.format(best_acc))
 
     # load best model weights
-#    model.load_state_dict(best_model_wts)
+    model.load_state_dict(best_model_wts)
     return model
                 
 
@@ -161,8 +178,7 @@ def predict(model, dataloaders, labs_keys, labs_values, phase="val"):
 #            break
 #    epoch_loss = running_loss #/ len(dataloaders[phase].dataset)
 #            epoch_acc = running_corrects.double() / len(dataloaders[phase].dataset)
-    #confusion_mat = np.zeros((model.output_size, model.output_size))
-    confusion_mat = np.zeros((5, 5))
+    confusion_mat = np.zeros((model.fc8.out_features, model.fc8.out_features))
     gt_list = [g for batch_list in gt_list for g in batch_list]
     pred_list = [p for batch_list in pred_list for p in batch_list]
     prev_gt = stroke_ids[0]
@@ -251,7 +267,7 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
                                          frames_per_clip=SEQ_SIZE, step_between_clips=STEP, 
                                          train=True, framewiseTransform=False, 
                                          transform=train_transforms)
-    val_dataset = CricketStrokesDataset(test_lst, DATASET, LABELS, CLASS_IDS, 
+    val_dataset = CricketStrokesDataset(val_lst, DATASET, LABELS, CLASS_IDS, 
                                         frames_per_clip=SEQ_SIZE, step_between_clips=STEP, 
                                         train=False, framewiseTransform=False, 
                                         transform=test_transforms)
@@ -263,12 +279,12 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     num_classes = len(list(set(labs_values)))
     
     # created weighted Sampler for class imbalance
-    if not os.path.isfile(os.path.join(base_name, "weights_"+str(len(train_dataset))+".pkl")):
+    if not os.path.isfile(os.path.join(base_name, "weights_c"+str(num_classes)+"_"+str(len(train_dataset))+".pkl")):
         samples_weight = attn_utils.get_sample_weights(train_dataset, labs_keys, labs_values, 
                                                        train_lst)
-        with open(os.path.join(base_name, "weights_"+str(len(train_dataset))+".pkl"), "wb") as fp:
+        with open(os.path.join(base_name, "weights_c"+str(num_classes)+"_"+str(len(train_dataset))+".pkl"), "wb") as fp:
             pickle.dump(samples_weight, fp)
-    with open(os.path.join(base_name, "weights_"+str(len(train_dataset))+".pkl"), "rb") as fp:
+    with open(os.path.join(base_name, "weights_c"+str(num_classes)+"_"+str(len(train_dataset))+".pkl"), "rb") as fp:
         samples_weight = pickle.load(fp)
     sampler = WeightedRandomSampler(samples_weight, len(samples_weight))
     train_loader = DataLoader(dataset=train_dataset, batch_size=BATCH_SIZE, 
@@ -307,26 +323,26 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     
     # Observe that all parameters are being optimized
 #    optimizer_ft = torch.optim.Adam(params_to_update, lr=0.01)
-    optimizer_ft = optim.SGD(params_to_update, lr=0.01, momentum=0.9)
+    optimizer_ft = optim.SGD(params_to_update, lr=0.001, momentum=0.9)
     
     # Decay LR by a factor of 0.1 every 7 epochs
-    lr_scheduler = StepLR(optimizer_ft, step_size=10, gamma=0.1)
+    lr_scheduler = StepLR(optimizer_ft, step_size=15, gamma=0.1)
     
     ###########################################################################
-#    # Training the model
-#    start = time.time()
-#    
-#    model = train_model(model, data_loaders, criterion, optimizer_ft, lr_scheduler, 
-#                        labs_keys, labs_values, num_epochs=N_EPOCHS)
-#        
-#    end = time.time()
-#    
-#    # save the best performing model
-#    attn_utils.save_model_checkpoint(base_name, model, N_EPOCHS, "SGD_c3d")
-    # Load model checkpoints
-    model = attn_utils.load_weights(base_name, model, N_EPOCHS, "SGD_c3d")
+    # Training the model
+    start = time.time()
     
-#    print("Total Execution time for {} epoch : {}".format(N_EPOCHS, (end-start)))
+    model = train_model(model, data_loaders, criterion, optimizer_ft, lr_scheduler, 
+                        labs_keys, labs_values, num_epochs=N_EPOCHS)
+        
+    end = time.time()
+    
+    # save the best performing model
+    attn_utils.save_model_checkpoint(base_name, model, N_EPOCHS, "SGD_c3dConv5bFC678_Iter150_c8")
+    # Load model checkpoints
+    model = attn_utils.load_weights(base_name, model, N_EPOCHS, "SGD_c3dConv5bFC678_Iter150_c8")
+    
+    print("Total Execution time for {} epoch : {}".format(N_EPOCHS, (end-start)))
 
 #    ###########################################################################    
     
@@ -342,7 +358,8 @@ if __name__ == '__main__':
     LABELS = "/home/arpan/VisionWorkspace/Cricket/scripts/supporting_files/sample_set_labels/sample_labels_shots/ICC WT20"
     DATASET = "/home/arpan/VisionWorkspace/VideoData/sample_cricket/ICC WT20"
     CLASS_IDS = "/home/arpan/VisionWorkspace/Cricket/cluster_strokes/configs/Class Index_Strokes.txt"
-    ANNOTATION_FILE = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/shots_classes.txt"
+#    ANNOTATION_FILE = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/shots_classes.txt"
+    ANNOTATION_FILE = "/home/arpan/VisionWorkspace/Cricket/stroke_recognition/config/stroke_types_classes.txt"    
 
     SEQ_SIZE = 16
     STEP = 4

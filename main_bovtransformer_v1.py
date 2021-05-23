@@ -43,10 +43,12 @@ from extract_hoof_feats import extract_stroke_feats
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # "of_feats_grid20.pkl", "of_feats_val_grid20.pkl" ; "hoof_feats_b20.pkl"
 # "2dcnn_feats_train.pkl" ; "3dcnn_feats_train.pkl" ; "hoof_feats_val_b20.pkl"
-feat, feat_val, feat_test = "of_feats_grid20.pkl", "of_feats_val_grid20.pkl", "of_feats_test_grid20.pkl"
+#"of_feats_grid20.pkl", "of_feats_val_grid20.pkl", "of_feats_test_grid20.pkl"
+feat, feat_val, feat_test = "hoof_feats_b40.pkl", "hoof_feats_val_b40.pkl", "hoof_feats_test_b40.pkl"
 # "of_snames_grid20.pkl" ; "2dcnn_snames_train.pkl" ; "3dcnn_snames_train.pkl";
 # "hoof_snames_b20.pkl"
-snames, snames_val, snames_test = "of_snames_grid20.pkl", "of_snames_val_grid20.pkl", "of_snames_test_grid20.pkl"
+#"of_snames_grid20.pkl", "of_snames_val_grid20.pkl", "of_snames_test_grid20.pkl"
+snames, snames_val, snames_test =  "hoof_snames_b40.pkl", "hoof_snames_val_b40.pkl", "hoof_snames_test_b40.pkl"
 cluster_size = 200
 INPUT_SIZE = cluster_size      # OFGRID: 576, 3DCNN: 512, 2DCNN: 2048
 HIDDEN_SIZE = 200
@@ -54,9 +56,9 @@ N_LAYERS = 2
 bidirectional = True
 
 km_filename = "km_onehot"
-log_path = "logs/bovtrans_SA_of20_Hidden200_C200_tmp"
+log_path = "logs/bovtrans_selfsup/SA_hoofDenFalse_b40_mth2_Hidden200_C200" #logs/bovtrans_SA_hoof_b40_mth2_Hidden200_C200
 # bow_HL_ofAng_grid20 ; bow_HL_2dres ; bow_HL_3dres_seq16; bow_HL_hoof_b20_mth2
-feat_path = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs/bow_HL_ofAng_grid20"
+feat_path = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs/all_hoof_feats/bow_HL_hoof_b40_mth2" #bow_HL_hoof_b40_mth2"
 
 def extract_of_features(feat_path, dataset, labspath, train_lst, val_lst):
     
@@ -109,7 +111,7 @@ def train_model(features, stroke_names_id, model, dataloaders, criterion,
                 # inputs of shape BATCH x SEQ_LEN x FEATURE_DIM
 #                labels = attn_utils.get_batch_labels(vid_path, stroke, labs_keys, labs_values, 1)
                 # Extract spatio-temporal features from clip using 3D ResNet (For SL >= 16)
-                inputs = inputs.float()
+                inputs, targets = inputs.float(), targets.float()
 #                inp_emb = attn_utils.get_long_tensor(inputs)    # comment out for SA
 #                inputs = inp_emb.to(device)                     # comment out for SA
 #                targets = attn_utils.get_long_tensor(targets).to(device)
@@ -135,7 +137,7 @@ def train_model(features, stroke_names_id, model, dataloaders, criterion,
 #                _, preds = torch.max(output, 1)
 
                 # statistics
-                running_loss += loss.item()  #* inputs.size(0)
+                running_loss += (1000*loss.item()) #  * inputs.size(0)
 #                print("Iter : {} :: Running Loss : {}".format(bno, running_loss))
 #                running_corrects += torch.sum(preds == targets.data)
 #                if bno==20:
@@ -479,22 +481,22 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     ###########################################################################
     # Training the model    
     
-    start = time.time()
-    
-    model = train_model(features, stroke_names_id, model, data_loaders, criterion, 
-                        optimizer, scheduler, labs_keys, labs_values,
-                        num_epochs=N_EPOCHS)
-    
-    end = time.time()
-    
-#    # save the best performing model
-    save_model_checkpoint(log_path, model, N_EPOCHS, 
-                                     "S"+str(SEQ_SIZE)+"C"+str(cluster_size)+"_SGD")
+#    start = time.time()
+#    
+#    model = train_model(features, stroke_names_id, model, data_loaders, criterion, 
+#                        optimizer, scheduler, labs_keys, labs_values,
+#                        num_epochs=N_EPOCHS)
+#    
+#    end = time.time()
+#    
+##    # save the best performing model
+#    save_model_checkpoint(log_path, model, N_EPOCHS, 
+#                                     "S"+str(SEQ_SIZE)+"C"+str(cluster_size)+"_SGD")
     # Load model checkpoints
     model = load_weights(log_path, model, N_EPOCHS, 
                                     "S"+str(SEQ_SIZE)+"C"+str(cluster_size)+"_SGD")
     
-    print("Total Execution time for {} epoch : {}".format(N_EPOCHS, (end-start)))
+#    print("Total Execution time for {} epoch : {}".format(N_EPOCHS, (end-start)))
 
     ###########################################################################
     
@@ -560,7 +562,7 @@ if __name__ == '__main__':
     attn_utils.seed_everything(1234)
     acc = []
 
-    print("OF20 BOV Transformer SA without Embedding...")
+    print("HOOF bins40 mth2 BOV Transformer SA without Embedding...")
     print("EPOCHS = {} : HIDDEN_SIZE = {} : LAYERS = {}".format(N_EPOCHS, 
           HIDDEN_SIZE, N_LAYERS))
     for SEQ_SIZE in seq_sizes:

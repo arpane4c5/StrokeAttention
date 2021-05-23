@@ -59,37 +59,12 @@ N_LAYERS = nlayers
 bidirectional = True
 
 km_filename = "km_onehot"
-log_path = "logs/bovtransMulti/HA_of20_hoofb20_HOG_Hidden200"
+log_path = "logs/bovtransMulti/HA_MagAngof20_hoofb20_HOG_Hidden200"
 # bow_HL_ofAng_grid20 ; bow_HL_2dres ; bow_HL_3dres_seq16; bow_HL_hoof_b20_mth2
-feat_path = ["/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs/bow_HL_ofAng_grid20",
+feat_path = ["/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs/bow_HL_ofMagAng_grid20",
              "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs/bow_HL_hoof_b20_mth2",
              "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/logs/bow_HL_HOG"
              ]
-
-def extract_of_features(feat_path, dataset, labspath, train_lst, val_lst):
-    
-    nbins, mth, grid = 20, 2, 20   # grid should be None for extracting HOOF
-    if not os.path.isfile(os.path.join(feat_path, "of_feats_grid"+str(grid)+".pkl")):
-        if not os.path.exists(feat_path):
-            os.makedirs(feat_path)
-        #    # Extract Grid OF / HOOF features {mth = 2, and vary nbins}
-        print("Training extraction ... ")
-        features, strokes_name_id = extract_stroke_feats(dataset, labspath, train_lst, \
-                                                     nbins, mth, True, grid) 
-        with open(os.path.join(feat_path, "of_feats_grid"+str(grid)+".pkl"), "wb") as fp:
-            pickle.dump(features, fp)
-        with open(os.path.join(feat_path, "of_snames_grid"+str(grid)+".pkl"), "wb") as fp:
-            pickle.dump(strokes_name_id, fp)
-                
-    if not os.path.isfile(os.path.join(feat_path, "of_feats_val_grid"+str(grid)+".pkl")):
-        print("Validation extraction ....")
-        features_val, strokes_name_id_val = extract_stroke_feats(dataset, labspath, val_lst, \
-                                                         nbins, mth, True, grid)
-
-        with open(os.path.join(feat_path, "of_feats_val_grid"+str(grid)+".pkl"), "wb") as fp:
-            pickle.dump(features_val, fp)
-        with open(os.path.join(feat_path, "of_snames_val_grid"+str(grid)+".pkl"), "wb") as fp:
-            pickle.dump(strokes_name_id_val, fp)
 
 
 def train_model(model, dataloaders, criterion, optimizer, scheduler, 
@@ -424,7 +399,7 @@ def extract_trans_feats(model, DATASET, LABELS, CLASS_IDS, BATCH_SIZE,
 
 
 def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16, 
-         STEP=16, nstrokes=-1, N_EPOCHS=25):
+         STEP=16, fstep=1, nstrokes=-1, N_EPOCHS=25):
     '''
     Extract sequence features from AutoEncoder.
     
@@ -464,7 +439,6 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     train_lst, val_lst, test_lst = autoenc_utils.split_dataset_files(DATASET)
     print("No. of training videos : {}".format(len(train_lst)))
     
-#    extract_of_features(feat_path, DATASET, LABELS, train_lst, val_lst)
     ft_path, ft_path_val, ft_path_test = [], [], []
     for i, ft_dir in enumerate(feat_path):
         print("Feature : {}".format(ft_dir))
@@ -528,10 +502,10 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     # Create a Dataset    
     train_dataset = StrokeMultiFeaturePairsDataset(ft_path, train_lst, DATASET, LABELS, CLASS_IDS, 
                                          frames_per_clip=SEQ_SIZE, extracted_frames_per_clip=2,
-                                         step_between_clips=STEP, train=True)
+                                         step_between_clips=STEP, future_step=fstep, train=True)
     val_dataset = StrokeMultiFeaturePairsDataset(ft_path_val, val_lst, DATASET, LABELS, CLASS_IDS, 
                                          frames_per_clip=SEQ_SIZE, extracted_frames_per_clip=2,
-                                         step_between_clips=STEP, train=False)
+                                         step_between_clips=STEP, future_step=fstep, train=False)
 
 #    # created weighted Sampler for class imbalance
 #    samples_weight = attn_utils.get_sample_weights(train_dataset, labs_keys, labs_values, 
@@ -585,21 +559,21 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     ###########################################################################
     # Training the model    
     
-    start = time.time()
-    
-    model = train_model(model, data_loaders, criterion, optimizer, scheduler, 
-                        labs_keys, labs_values, num_epochs=N_EPOCHS)
-    
-    end = time.time()
-    
-#    # save the best performing model
-    save_model_checkpoint(log_path, model, N_EPOCHS, 
-                                     "S"+str(SEQ_SIZE)+"C"+str(cluster_size)+"_SGD")
+#    start = time.time()
+#    
+#    model = train_model(model, data_loaders, criterion, optimizer, scheduler, 
+#                        labs_keys, labs_values, num_epochs=N_EPOCHS)
+#    
+#    end = time.time()
+#    
+##    # save the best performing model
+#    save_model_checkpoint(log_path, model, N_EPOCHS, 
+#                                     "S"+str(SEQ_SIZE)+"C"+str(cluster_size)+"_SGD")
     # Load model checkpoints
     model = load_weights(log_path, model, N_EPOCHS, 
                                     "S"+str(SEQ_SIZE)+"C"+str(cluster_size)+"_SGD")
     
-    print("Total Execution time for {} epoch : {}".format(N_EPOCHS, (end-start)))
+#    print("Total Execution time for {} epoch : {}".format(N_EPOCHS, (end-start)))
 
     ###########################################################################
     
@@ -609,43 +583,43 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     ###########################################################################
     
     # Extract attention model features 
-    if not os.path.isfile(os.path.join(log_path, "trans_feats.pkl")):
-        if not os.path.exists(log_path):
-            os.makedirs(log_path)
+    if not os.path.isfile(os.path.join(log_path+"/s"+str(fstep), "trans_feats.pkl")):
+        if not os.path.exists(log_path+"/s"+str(fstep)):
+            os.makedirs(log_path+"/s"+str(fstep))
         #    # Extract Grid OF / HOOF features {mth = 2, and vary nbins}
         print("Training extraction ... ")
         feats_dict, stroke_names = extract_trans_feats(model, DATASET, LABELS, 
                                                       CLASS_IDS, BATCH_SIZE, SEQ_SIZE, 
-                                                      SEQ_SIZE-1, partition='train', nstrokes=nstrokes, 
+                                                      2, partition='train', nstrokes=nstrokes, 
                                                       base_name=log_path)
 
-        with open(os.path.join(log_path, "trans_feats.pkl"), "wb") as fp:
+        with open(os.path.join(log_path+"/s"+str(fstep), "trans_feats.pkl"), "wb") as fp:
             pickle.dump(feats_dict, fp)
-        with open(os.path.join(log_path, "trans_snames.pkl"), "wb") as fp:
+        with open(os.path.join(log_path+"/s"+str(fstep), "trans_snames.pkl"), "wb") as fp:
             pickle.dump(stroke_names, fp)
             
-    if not os.path.isfile(os.path.join(log_path, "trans_feats_val.pkl")):
+    if not os.path.isfile(os.path.join(log_path+"/s"+str(fstep), "trans_feats_val.pkl")):
         print("Validation extraction ....")
         feats_dict_val, stroke_names_val = extract_trans_feats(model, DATASET, LABELS, 
                                                       CLASS_IDS, BATCH_SIZE, SEQ_SIZE, 
-                                                      SEQ_SIZE-1, partition='val', nstrokes=nstrokes, 
+                                                      2, partition='val', nstrokes=nstrokes, 
                                                       base_name=log_path)
 
-        with open(os.path.join(log_path, "trans_feats_val.pkl"), "wb") as fp:
+        with open(os.path.join(log_path+"/s"+str(fstep), "trans_feats_val.pkl"), "wb") as fp:
             pickle.dump(feats_dict_val, fp)
-        with open(os.path.join(log_path, "trans_snames_val.pkl"), "wb") as fp:
+        with open(os.path.join(log_path+"/s"+str(fstep), "trans_snames_val.pkl"), "wb") as fp:
             pickle.dump(stroke_names_val, fp)
     
-    if not os.path.isfile(os.path.join(log_path, "trans_feats_test.pkl")):
+    if not os.path.isfile(os.path.join(log_path+"/s"+str(fstep), "trans_feats_test.pkl")):
         print("Testing extraction ....")
         feats_dict_val, stroke_names_val = extract_trans_feats(model, DATASET, LABELS, 
                                                       CLASS_IDS, BATCH_SIZE, SEQ_SIZE, 
-                                                      SEQ_SIZE-1, partition='test', nstrokes=nstrokes, 
+                                                      2, partition='test', nstrokes=nstrokes, 
                                                       base_name=log_path)
 
-        with open(os.path.join(log_path, "trans_feats_test.pkl"), "wb") as fp:
+        with open(os.path.join(log_path+"/s"+str(fstep), "trans_feats_test.pkl"), "wb") as fp:
             pickle.dump(feats_dict_val, fp)
-        with open(os.path.join(log_path, "trans_snames_test.pkl"), "wb") as fp:
+        with open(os.path.join(log_path+"/s"+str(fstep), "trans_snames_test.pkl"), "wb") as fp:
             pickle.dump(stroke_names_val, fp)
             
     # call count_paramters(model)  for displaying total no. of parameters
@@ -664,6 +638,7 @@ if __name__ == '__main__':
     STEP = 1
     BATCH_SIZE = 32
     N_EPOCHS = 30
+    fstep = 1
     
     attn_utils.seed_everything(1234)
     acc = []
@@ -672,9 +647,10 @@ if __name__ == '__main__':
     print("EPOCHS = {} : HIDDEN_SIZE = {} : LAYERS = {}".format(N_EPOCHS, 
           HIDDEN_SIZE, N_LAYERS))
     for SEQ_SIZE in seq_sizes:
-        print("SEQ_SIZE : {} :: CLUSTER_SIZE : {}".format(SEQ_SIZE, cluster_size))
-        acc.append(main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE,
-                        SEQ_SIZE, STEP, nstrokes=-1, N_EPOCHS=N_EPOCHS))
+        for fstep in range(1, 21, 2):
+            print("SEQ_SIZE : {} :: CLUSTER_SIZE : {}".format(SEQ_SIZE, cluster_size))
+            acc.append(main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE,
+                            SEQ_SIZE, STEP, fstep=fstep , nstrokes=-1, N_EPOCHS=N_EPOCHS))
         
     print("*"*60)
     print("SEQ_SIZES : {}".format(seq_sizes))

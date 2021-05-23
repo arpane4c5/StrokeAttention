@@ -5,7 +5,7 @@ Created on Sun Jul 26 23:43:52 2020
 
 @author: arpan
 
-@Description: Train an Attention model on strokes
+@Description: Train a C3DGRU model on strokes
 """
 
 import os
@@ -59,7 +59,7 @@ def copy_pretrained_weights(model_src, model_tar):
         if name_src in dict_params_tar:
             print("Copy : {}".format(name_src))
             dict_params_tar[name_src].data.copy_(param_src.data)
-            dict_params_tar[name_src].requires_grad = False     # Freeze layer wts
+#            dict_params_tar[name_src].requires_grad = False     # Freeze layer wts
             
 
 def train_model(model, dataloaders, criterion, optimizer, scheduler, labs_keys, 
@@ -118,8 +118,8 @@ def train_model(model, dataloaders, criterion, optimizer, scheduler, labs_keys,
                 running_corrects += torch.sum(preds == labels.data)
                 
 #                print("Batch No : {} / {}".format(bno, len(dataloaders[phase])))
-                if (bno+1) % 20 == 0:
-                    break
+#                if (bno+1) % 20 == 0:
+#                    break
                     
             if phase == 'train':
                 scheduler.step()
