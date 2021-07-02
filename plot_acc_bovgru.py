@@ -120,9 +120,9 @@ def plot_acc_diff_feats(x, keys, l, xlab, ylab, fname):
     plt.xlabel(xlab, fontsize=12)
     plt.ylabel(ylab, fontsize=12)
     plt.axvline(x=20, color='r', linestyle='--')
-    plt.axvline(x=2, color='g', linestyle='-')
-    plt.axvline(x=2, color='b', linestyle='--')
-    plt.axvline(x=32, color='c', linestyle='--')
+    plt.axvline(x=2, color='g', linestyle='--')
+    plt.axvline(x=18, color='b', linestyle='--')     # old x = 2
+    plt.axvline(x=16, color='c', linestyle='--')  # old x=32
     plt.legend(loc=4)
     plt.ylim(bottom=0, top=1)
     plt.show()
@@ -205,18 +205,33 @@ if __name__ == '__main__':
                         0.7047619047619048, 0.6857142857142857]  # Params 8915973 
     
     seq_cnn = list(range(2, 31, 2))
-    CNN2D_HA_C1k_H256 = [0.47619047619047616, 0.44761904761904764, 0.41904761904761906, 
-                    0.4380952380952381, 0.42857142857142855, 0.44761904761904764, 
-                    0.45714285714285713, 0.42857142857142855, 0.42857142857142855, 
-                    0.4095238095238095, 0.4095238095238095, 0.3904761904761905, 
-                    0.41904761904761906, 0.4380952380952381, 0.3619047619047619, 
-                    0.4380952380952381, 0.45714285714285713, 0.4, 0.41904761904761906, 
-                    0.38095238095238093]
+#    CNN2D_HA_C1k_H256 = [0.47619047619047616, 0.44761904761904764, 0.41904761904761906, 
+#                    0.4380952380952381, 0.42857142857142855, 0.44761904761904764, 
+#                    0.45714285714285713, 0.42857142857142855, 0.42857142857142855, 
+#                    0.4095238095238095, 0.4095238095238095, 0.3904761904761905, 
+#                    0.41904761904761906, 0.4380952380952381, 0.3619047619047619, 
+#                    0.4380952380952381, 0.45714285714285713, 0.4, 0.41904761904761906, 
+#                    0.38095238095238093]
+    # New results with Corrected videotransforms
+    CNN2D_HA_C1k_H256 = [0.5238095238095238, 0.4666666666666667, 0.49523809523809526, 
+                         0.4857142857142857, 0.5047619047619047, 0.5238095238095238, 
+                         0.5142857142857142, 0.5142857142857142, 0.5333333333333333, 
+                         0.5238095238095238, 0.4666666666666667, 0.5333333333333333, 
+                         0.4666666666666667, 0.5142857142857142, 0.5047619047619047, 
+                         0.5047619047619047, 0.49523809523809526, 0.49523809523809526, 
+                         0.4857142857142857, 0.5142857142857142]
     
-    CNN3D_HA_C1k_H256 = [0.4380952380952381, 0.4857142857142857, 0.44761904761904764, 
-                         0.47619047619047616, 0.42857142857142855, 0.4857142857142857, 
-                         0.47619047619047616, 0.4, 0.5047619047619047, 0.4380952380952381, 
-                         0.41904761904761906, 0.37142857142857144, 0.42857142857142855]
+#    CNN3D_HA_C1k_H256 = [0.4380952380952381, 0.4857142857142857, 0.44761904761904764, 
+#                         0.47619047619047616, 0.42857142857142855, 0.4857142857142857, 
+#                         0.47619047619047616, 0.4, 0.5047619047619047, 0.4380952380952381, 
+#                         0.41904761904761906, 0.37142857142857144, 0.42857142857142855]
+    # New results with corrected videotransforms
+    CNN3D_HA_C1k_H256 = [0.5904761904761905, 0.5333333333333333, 0.5619047619047619, 
+                         0.5714285714285714, 0.5714285714285714, 0.5619047619047619, 
+                         0.5428571428571428, 0.47619047619047616, 0.5523809523809524, 
+                         0.5238095238095238, 0.5523809523809524, 0.5428571428571428, 
+                         0.49523809523809526]
+    
     
     CNN3D_HA_C2k_H256 = [0.5047619047619047, 0.5142857142857142, 0.4666666666666667, 
                          0.4666666666666667, 0.4380952380952381, 0.44761904761904764, 
@@ -245,12 +260,12 @@ if __name__ == '__main__':
     ###########################################################################
     # Plot Comparison for different features with HA and C=1k
     
-#    keys = ["OF Grid=20", "HOOF Bins=20", "2D CNN", "3DCNN"]  # Hidden=256, C=1k 
-#    l = {keys[0] : OF20_HA_C1k_H256, keys[1] : HOOF_B20_HA_C1k, 
-#         keys[2] : CNN2D_HA_C1k_H256, keys[3] : CNN3D_HA_C1k_H256}
-#    
-#    fname = os.path.join("logs", "CompareFeats.png")
-#    plot_acc_diff_feats(seq, keys, l, "Sequence Length", "Accuracy", fname)
+    keys = ["OF Grid=20", "HOOF Bins=20", "2DCNN", "3DCNN"]  # Hidden=256, C=1k 
+    l = {keys[0] : OF20_HA_C1k_H256, keys[1] : HOOF_B20_HA_C1k, 
+         keys[2] : CNN2D_HA_C1k_H256, keys[3] : CNN3D_HA_C1k_H256}
+    
+    fname = os.path.join("logs", "CompareFeats_v1.png")
+    plot_acc_diff_feats(seq, keys, l, "Sequence Length", "Accuracy", fname)
     
     ###########################################################################
     # Plot comparing OF10 Vs OF20 with H256
@@ -323,31 +338,32 @@ if __name__ == '__main__':
 #                            32, best_ep, acc_file)
 #    
     ###########################################################################
-    # Plot the C3D finetuning losses (SEQ_SIZE = 16, STEP = 4, BATCH = 16, ITer=150/Ep)
-    file = "logs/plot_data/C3DFine_seq16_SGD.txt" # 
-    train_loss, test_loss, train_acc, test_acc = [], [], [], []
-    seq = 16
-    with open(file, 'r') as fp:
-        lines = fp.readlines()
-    for line in lines: 
-        line = line.strip()
-        if 'train Loss:' in line:
-            t = re.findall("\d+\.\d+", line)
-            train_loss.append(float(t[0]))
-            train_acc.append(float(t[1]))
-        elif 'test Loss:' in line:
-            t = re.findall("\d+\.\d+", line)
-            test_loss.append(float(t[0]))
-            test_acc.append(float(t[1]))
-            
-    l1 = {"train loss" : train_loss, "test loss": test_loss}
-    l2 = {"train accuracy" : train_acc, "test accuracy" : test_acc}
-    best_ep = test_acc.index(max(test_acc)) + 1
-    loss_file = 'logs/plot_data/C3DFine_seq16.png'
-    acc_file = 'logs/plot_data/C3DFine_acc_seq16.png'
-    plot_traintest_loss(["train loss", "test loss"], l1, "Epochs", "Loss", seq, 16, loss_file)
-    plot_traintest_accuracy(["train accuracy", "test accuracy"], l2, "Epochs", "Accuracy", seq, 
-                            16, best_ep, acc_file)
+#    # Plot the C3D finetuning losses (SEQ_SIZE = 16, STEP = 4, BATCH = 16, ITer=150/Ep)
+##    file = "logs/plot_data/C3DFine_seq16_SGD.txt" # 
+#    file = "logs/plot_data/C3DFine_seq16_SGD_newTransforms.txt"
+#    train_loss, test_loss, train_acc, test_acc = [], [], [], []
+#    seq = 16
+#    with open(file, 'r') as fp:
+#        lines = fp.readlines()
+#    for line in lines: 
+#        line = line.strip()
+#        if 'train Loss:' in line:
+#            t = re.findall("\d+\.\d+", line)
+#            train_loss.append(float(t[0]))
+#            train_acc.append(float(t[1]))
+#        elif 'test Loss:' in line:
+#            t = re.findall("\d+\.\d+", line)
+#            test_loss.append(float(t[0]))
+#            test_acc.append(float(t[1]))
+#            
+#    l1 = {"train loss" : train_loss, "test loss": test_loss}
+#    l2 = {"train accuracy" : train_acc, "test accuracy" : test_acc}
+#    best_ep = test_acc.index(max(test_acc)) + 1
+#    loss_file = 'logs/plot_data/C3DFine_seq16_newTrans.png'
+#    acc_file = 'logs/plot_data/C3DFine_acc_seq16_newTrans.png'
+#    plot_traintest_loss(["train loss", "test loss"], l1, "Epochs", "Loss", seq, 16, loss_file)
+#    plot_traintest_accuracy(["train accuracy", "test accuracy"], l2, "Epochs", "Accuracy", seq, 
+#                            16, best_ep, acc_file)
     
     ###########################################################################
     

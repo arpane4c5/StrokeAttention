@@ -121,8 +121,9 @@ class HMDB51(VisionDataset):
             if self.framewiseTransform:
                 if isinstance(self.transform, transforms.Compose):
                     # transform frame-wise (takes input as HxWxC)
-                    video = torch.stack([self.transform(i) for i in video])
+                    video = torch.stack([self.transform(i.permute(2, 0, 1)) for i in video])
             else:   # clip level transform (takes input as TxHxWxC)
+                video = video.permute(0, 3, 1, 2)
                 video = self.transform(video)
             
         if isinstance(video, list):

@@ -39,7 +39,7 @@ import attn_utils
 #import model_c3d as c3d_pre
 import model_c3d_finetune as c3d
 
-device = torch.device('cuda:2' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 base_path = "/home/arpan/VisionWorkspace/Cricket/StrokeAttention/logs/c3dFine"
 wts_path = 'c3d.pickle'
 HIDDEN_SIZE = 1024 #64#1024
@@ -267,7 +267,7 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
                                          frames_per_clip=SEQ_SIZE, step_between_clips=STEP, 
                                          train=True, framewiseTransform=False, 
                                          transform=train_transforms)
-    val_dataset = CricketStrokesDataset(val_lst, DATASET, LABELS, CLASS_IDS, 
+    val_dataset = CricketStrokesDataset(test_lst, DATASET, LABELS, CLASS_IDS, 
                                         frames_per_clip=SEQ_SIZE, step_between_clips=STEP, 
                                         train=False, framewiseTransform=False, 
                                         transform=test_transforms)
@@ -330,19 +330,19 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     
     ###########################################################################
     # Training the model
-    start = time.time()
-    
-    model = train_model(model, data_loaders, criterion, optimizer_ft, lr_scheduler, 
-                        labs_keys, labs_values, num_epochs=N_EPOCHS)
-        
-    end = time.time()
-    
-    # save the best performing model
-    attn_utils.save_model_checkpoint(base_name, model, N_EPOCHS, "SGD_c3dConv5bFC678_Iter150_c8")
+#    start = time.time()
+#    
+#    model = train_model(model, data_loaders, criterion, optimizer_ft, lr_scheduler, 
+#                        labs_keys, labs_values, num_epochs=N_EPOCHS)
+#        
+#    end = time.time()
+#    
+#    # save the best performing model
+#    attn_utils.save_model_checkpoint(base_name, model, N_EPOCHS, "SGD_c3dConv5bFC678_Iter150_c8")
     # Load model checkpoints
-    model = attn_utils.load_weights(base_name, model, N_EPOCHS, "SGD_c3dConv5bFC678_Iter150_c8")
+    model = attn_utils.load_weights(base_name, model, N_EPOCHS, "SGD_c3dConv5bFC678_Iter150_c5")
     
-    print("Total Execution time for {} epoch : {}".format(N_EPOCHS, (end-start)))
+#    print("Total Execution time for {} epoch : {}".format(N_EPOCHS, (end-start)))
 
 #    ###########################################################################    
     
@@ -358,8 +358,8 @@ if __name__ == '__main__':
     LABELS = "/home/arpan/VisionWorkspace/Cricket/scripts/supporting_files/sample_set_labels/sample_labels_shots/ICC WT20"
     DATASET = "/home/arpan/VisionWorkspace/VideoData/sample_cricket/ICC WT20"
     CLASS_IDS = "/home/arpan/VisionWorkspace/Cricket/cluster_strokes/configs/Class Index_Strokes.txt"
-#    ANNOTATION_FILE = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/shots_classes.txt"
-    ANNOTATION_FILE = "/home/arpan/VisionWorkspace/Cricket/stroke_recognition/config/stroke_types_classes.txt"    
+    ANNOTATION_FILE = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/shots_classes.txt"
+#    ANNOTATION_FILE = "/home/arpan/VisionWorkspace/Cricket/stroke_recognition/config/stroke_types_classes.txt"    
 
     SEQ_SIZE = 16
     STEP = 4
