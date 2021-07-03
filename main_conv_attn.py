@@ -5,7 +5,7 @@ Created on Sun Jul 26 23:43:52 2020
 
 @author: arpan
 
-@Description: Train an Attention model on strokes. Problem: Test Acc at training is 0.00
+@Description: Train an Attention model on strokes. Problem: 
 """
 
 import os
@@ -16,9 +16,6 @@ import numpy as np
 sys.path.insert(0, '../cluster_strokes')
 sys.path.insert(0, '../cluster_strokes/lib')
 
-##from utils import spectral_utils
-#from utils import plot_utils
-#from evaluation import eval_of_clusters
 import torch
 from torch import nn, optim
 from torchvision import transforms
@@ -123,7 +120,7 @@ def train_model(encoder, decoder, dataloaders, criterion, encoder_optimizer, dec
                     
                     batch_size = inputs.size(0)
                     enc_h = encoder._init_hidden(batch_size)
-                    enc_out = encoder(inputs, enc_h)
+                    enc_out, enc_h = encoder(inputs, enc_h)
                     dec_h = decoder._init_hidden(batch_size)
                     #start symbol of dim  (batch x output_size) 
                     inp = torch.zeros((dec_h.size(1), HIDDEN_SIZE)).to(device)  #starting symbol
@@ -206,12 +203,12 @@ def train_model(encoder, decoder, dataloaders, criterion, encoder_optimizer, dec
     return encoder, decoder
 
 
-
 def predict(encoder, decoder, dataloaders, criterion, labs_keys, labs_values, phase="val", seq=8):
     assert phase == "val" or phase=="test", "Incorrect Phase."
     encoder = encoder.eval()
 #    decoder = decoder.eval()
     vid_path_lst, stroke_lst, labs_lst, batch_wts = [], [], [], []
+    gt_list, pred_list, stroke_ids = [], [], []
     # Iterate over data.
     for bno, (inputs, vid_path, stroke, labels) in enumerate(dataloaders[phase]):
         # inputs of shape BATCH x SEQ_LEN x FEATURE_DIM
@@ -221,215 +218,70 @@ def predict(encoder, decoder, dataloaders, criterion, labs_keys, labs_values, ph
         
 #        targets = inputs
         inputs = inputs.to(device)
-        loss = 0
+        labels = labels.to(device)
         # forward
         # track history if only in train
         with torch.set_grad_enabled(phase == 'train'):
             
             batch_size = inputs.size(0)
             enc_h = encoder._init_hidden(batch_size)
-            enc_out = encoder(inputs, enc_h)
+            enc_out, enc_h = encoder(inputs, enc_h)
             dec_h = decoder._init_hidden(batch_size)
             inp = torch.zeros((dec_h.size(1), HIDDEN_SIZE)).to(device)  #starting symbol
             dec_out, attn_wts = decoder(enc_h, enc_out, inp)
-#            for si in range(0, inputs.size(2)-seq+1, SHIFT):
-#                mod_inp = inputs[:,:,si:(si+seq)]
-#                mod_inp = mod_inp.to(device)
-#                enc_h = encoder._init_hidden(batch_size)
-#            #enc_out, h = encoder(inputs, enc_h)
-#                enc_out, enc_h, attn_wts = encoder(mod_inp, enc_h)
-#            dec_out, attn_wts = decoder(h, enc_out)
-            loss += criterion(dec_out, labels)
-            _, preds = torch.max(dec_out, 1)
+            
+            probs = dec_out
             vid_path_lst.append(vid_path)
             stroke_lst.append(stroke)
             labs_lst.append(labels)
             batch_wts.append(attn_wts)
-            #attn_wts = torch.stack(attn_wts_lst)
-#            dec_h = h
-#            dec_in = torch.zeros(batch_size, targets.size(2)).to(device)
-#            dec_out_lst = []
-#            target_length = targets.size(1)      # assign SEQ_LEN as target length for now
-#            # run for each word of the sequence (use teacher forcing)
-#            for ti in range(target_length):
-#                dec_out, dec_h, dec_attn = decoder(dec_h, enc_out, dec_in)
-#                dec_out_lst.append(dec_out)
-##                loss += criterion(dec_out, targets[:,ti,:])
-#                dec_in = dec_out
-                
-#            outputs = torch.stack(dec_out_lst, dim=1)
             
-#                    outputs, dec_h, wts = model(inputs, inputs)
-#                    _, preds = torch.max(outputs, 1)
-#                    loss = criterion(outputs, targets)     #torch.flip(targets, [1])
+            gt_list.append(labels.tolist())
+            pred_list.append((torch.max(probs, 1)[1]).tolist())
+            for i, vid in enumerate(vid_path):
+                stroke_ids.extend([vid+"_"+str(stroke[0][i].item())+"_"+str(stroke[1][i].item())] * 1)
         # statistics
 #        running_loss += loss.item()
 #                print("Iter : {} :: Running Loss : {}".format(bno, running_loss))
 #                running_corrects += torch.sum(preds == labels.data)
         
         print("Batch No : {} / {}".format(bno, len(dataloaders[phase])))
-        if (bno+1) % 20 == 0:
-            break
-#    epoch_loss = running_loss #/ len(dataloaders[phase].dataset)
-#            epoch_acc = running_corrects.double() / len(dataloaders[phase].dataset)
+#        if (bno+1) % 20 == 0:
+#            break
+
     pred_dict = {"paths": vid_path_lst, 
                  "strokes": stroke_lst, 
                  "labels": labs_lst, 
                  "wts": batch_wts}
-    return pred_dict
-    
-
-def extract_attn_feats(encoder, decoder, DATASET, LABELS, CLASS_IDS, BATCH_SIZE, 
-                       SEQ_SIZE=16, STEP=16, partition='train', nstrokes=-1, base_name=""):
-    '''
-    Extract sequence features from AutoEncoder.
-    
-    Parameters:
-    -----------
-    encoder, decoder : attn_model.Encoder 
-        relative path to the checkpoint file for Autoencoder
-    DATASET : str
-        path to the video dataset
-    LABELS : str
-        path containing stroke labels
-    BATCH_SIZE : int
-        size for batch of clips
-    SEQ_SIZE : int
-        no. of frames in a clip
-    STEP : int
-        stride for next example. If SEQ_SIZE=16, STEP=8, use frames (0, 15), (8, 23) ...
-    partition : str
-        'train' / 'test' / 'val' : Videos to be considered
-    nstrokes : int
-        partial extraction of features (do not execute for entire dataset)
-    base_name : str
-        path containing the pickled feature dumps
-    
-    Returns:
-    --------
-    features_dictionary, stroke_names
-    
-    '''
-    
-    ###########################################################################
-    # Read the strokes 
-    # Divide the highlight dataset files into training, validation and test sets
-    train_lst, val_lst, test_lst = autoenc_utils.split_dataset_files(DATASET)
-    print("No. of training videos : {}".format(len(train_lst)))
-    
-    #####################################################################
-    
-    if partition == 'train':
-        partition_lst = train_lst
-    elif partition == 'val':
-        partition_lst = val_lst
-    elif partition == 'test':
-        partition_lst = test_lst
-    else:
-        print("Partition should be : train / val / test")
-        return
+    confusion_mat = np.zeros((decoder.output_size, decoder.output_size))
+    gt_list = [g for batch_list in gt_list for g in batch_list]
+    pred_list = [p for batch_list in pred_list for p in batch_list]
+    prev_gt = stroke_ids[0]
+    val_labels, pred_labels, vid_preds = [], [], []
+    for i, pr in enumerate(pred_list):
+        if prev_gt != stroke_ids[i]:
+            # find max category predicted in pred_labels
+            val_labels.append(gt_list[i-1])
+            pred_labels.append(max(set(vid_preds), key = vid_preds.count))
+            vid_preds = []
+            prev_gt = stroke_ids[i]
+        vid_preds.append(pr)
         
-    ###########################################################################
-    # Create a Dataset
-    # Clip level transform. Use this with framewiseTransform flag turned off
-    clip_transform = transforms.Compose([videotransforms.CenterCrop(224),
-                                         videotransforms.ToPILClip(), 
-                                         videotransforms.Resize((112, 112)),
-#                                         videotransforms.RandomCrop(112), 
-                                         videotransforms.ToTensor(), 
-#                                         videotransforms.Normalize(),
-                                        #videotransforms.RandomHorizontalFlip(),\
-                                        ])    
-    part_dataset = CricketStrokesDataset(partition_lst, DATASET, LABELS, CLASS_IDS, 
-                                         frames_per_clip=SEQ_SIZE, step_between_clips=STEP, 
-                                         train=False, framewiseTransform=False, 
-                                         transform=clip_transform)
+    val_labels.append(gt_list[-1])
+    pred_labels.append(max(set(vid_preds), key = vid_preds.count))
+    correct = 0
+    for i,true_val in enumerate(val_labels):
+        if pred_labels[i] == true_val:
+            correct+=1
+        confusion_mat[pred_labels[i], true_val]+=1
+    print('#'*30)
+    print("GRU Sequence Classification Results:")
+    print("%d/%d Correct" % (correct, len(pred_labels)))
+    print("Accuracy = {} ".format( float(correct) / len(pred_labels)))
+    print("Confusion matrix")
+    print(confusion_mat)
+    return pred_dict, (float(correct) / len(pred_labels))
     
-    data_loader = DataLoader(dataset=part_dataset, batch_size=BATCH_SIZE, shuffle=False)
-
-    ###########################################################################
-    # Validate / Evaluate
-    encoder.eval()
-    decoder.eval()
-    stroke_names = []
-    trajectories, stroke_traj = [], []
-    num_strokes = 0
-    prev_stroke = None
-    print("Total Batches : {} :: BATCH_SIZE : {}".format(data_loader.__len__(), BATCH_SIZE))
-    ###########################################################################
-    for bno, (inputs, vid_path, stroke, labels) in enumerate(data_loader):
-        # inputs of shape BATCH x SEQ_LEN x FEATURE_DIM
-        inputs = inputs.permute(0, 2, 1, 3, 4).float()
-        inputs = inputs.to(device)
-        targets = inputs
-#        print("Batch No : {} / {}".format(bno, len(data_loader)))
-        # forward
-        # track history if only in train
-        with torch.set_grad_enabled(False):
-            
-            batch_size = inputs.size(0)
-            enc_h = encoder._init_hidden(batch_size)
-            enc_out, enc_h = encoder(inputs, enc_h)
-#            dec_out = decoder(enc_out)
-#            loss += criterion(dec_out, targets)
-            
-            dec_out_lst = []
-#            target_length = inputs.size(1)      # assign SEQ_LEN as target length for now
-            # run for each word of the sequence (use teacher forcing)
-#            for ti in range(target_length):
-#                dec_out, dec_h, dec_attn = decoder(dec_h, enc_out, dec_in)
-            dec_out_lst.append(enc_out)
-#                dec_in = dec_out
-    
-            outputs = torch.stack(dec_out_lst, dim=1)
-            
-        # convert to start frames and end frames from tensors to lists
-        stroke = [s.tolist() for s in stroke]
-        # outputs are the reconstructed features. Use compressed enc_out values(maybe wtd.).
-        inputs_lst, batch_stroke_names = autoenc_utils.separate_stroke_tensors(enc_out, \
-                                                                    vid_path, stroke)
-        
-        # for sequence of features from batch segregated extracted features.
-        if bno == 0:
-            prev_stroke = batch_stroke_names[0]
-        
-        for enc_idx, enc_input in enumerate(inputs_lst):
-            # get no of sequences that can be extracted from enc_input tensor
-            nSeqs = enc_input.size(0)
-            if prev_stroke != batch_stroke_names[enc_idx]:
-                # append old stroke to trajectories
-                if len(stroke_traj) > 0:
-                    num_strokes += 1
-                    trajectories.append(stroke_traj)
-                    stroke_names.append(prev_stroke)
-                    stroke_traj = []
-            
-#            enc_output = model.encoder(enc_input.to(device))
-#            enc_output = enc_output.squeeze(axis=1).cpu().data.numpy()
-            enc_output = enc_input.cpu().data.numpy()
-            
-            # convert to [[[stroke1(size 32 each) ... ], [], ...], [ [], ... ]]
-            stroke_traj.extend([enc_output[i,j,:] for i in range(enc_output.shape[0]) \
-                                                for j in range(enc_output.shape[1])])
-            prev_stroke = batch_stroke_names[enc_idx]
-            
-        if nstrokes > -1 and num_strokes >= nstrokes:
-            break
-       
-    # for last batch only if extracted for full dataset
-    if len(stroke_traj) > 0 and nstrokes < 0:
-        trajectories.append(stroke_traj)
-        stroke_names.append(batch_stroke_names[-1])
-    
-    # convert to dictionary of features with keys as stroke names(with ext). 
-    features = {}
-    for i, t in enumerate(trajectories):
-        features[stroke_names[i]] = np.array(t)
-    
-#    trajectories, stroke_names = autoenc_utils.group_strokewise(trajectories, stroke_names)
-    
-    return features, stroke_names
-
 
 def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16, 
          STEP=16, nstrokes=-1, N_EPOCHS=25, base_name=""):
@@ -462,8 +314,8 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     '''
     ###########################################################################
     # seed everything
-    
-    
+    seed = 1234
+    attn_utils.seed_everything(seed)
     if not os.path.isdir(base_name):
         os.makedirs(base_name)
     
@@ -504,17 +356,17 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     
     num_classes = len(list(set(labs_values)))
     
-#    # created weighted Sampler for class imbalance
-#    if not os.path.isfile(os.path.join(base_name, "weights_c"+str(num_classes)+"_"+str(len(train_dataset))+".pkl")):
-#        samples_weight = attn_utils.get_sample_weights(train_dataset, labs_keys, labs_values, 
-#                                                       train_lst)
-#        with open(os.path.join(base_name, "weights_c"+str(num_classes)+"_"+str(len(train_dataset))+".pkl"), "wb") as fp:
-#            pickle.dump(samples_weight, fp)
-#    with open(os.path.join(base_name, "weights_c"+str(num_classes)+"_"+str(len(train_dataset))+".pkl"), "rb") as fp:
-#        samples_weight = pickle.load(fp)
-#    sampler = WeightedRandomSampler(samples_weight, len(samples_weight))
-    train_loader = DataLoader(dataset=train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-                              #sampler=sampler, worker_init_fn=np.random.seed(12))
+    # created weighted Sampler for class imbalance
+    if not os.path.isfile(os.path.join(base_name, "weights_c"+str(num_classes)+"_"+str(len(train_dataset))+".pkl")):
+        samples_weight = attn_utils.get_sample_weights(train_dataset, labs_keys, labs_values, 
+                                                       train_lst)
+        with open(os.path.join(base_name, "weights_c"+str(num_classes)+"_"+str(len(train_dataset))+".pkl"), "wb") as fp:
+            pickle.dump(samples_weight, fp)
+    with open(os.path.join(base_name, "weights_c"+str(num_classes)+"_"+str(len(train_dataset))+".pkl"), "rb") as fp:
+        samples_weight = pickle.load(fp)
+    sampler = WeightedRandomSampler(samples_weight, len(samples_weight))
+    train_loader = DataLoader(dataset=train_dataset, batch_size=BATCH_SIZE, 
+                              sampler=sampler, worker_init_fn=np.random.seed(12))
     
     val_loader = DataLoader(dataset=val_dataset, batch_size=BATCH_SIZE, shuffle=False)
     
@@ -524,7 +376,7 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     # load model and set loss function    
     encoder = conv_attn_model.Conv3DEncoder(HIDDEN_SIZE, 1, bidirectional)
 #    encoder = conv_attn_model.Conv3DAttention(HIDDEN_SIZE, num_classes, 1, 196, bidirectional)
-    decoder = conv_attn_model.Conv3DDecoder(HIDDEN_SIZE, num_classes, 1, 196, bidirectional)
+    decoder = conv_attn_model.Conv3DDecoder(HIDDEN_SIZE, num_classes, 1, 1, bidirectional)
 #    decoder = conv_encdec_model.Conv3DDecoder(HIDDEN_SIZE, HIDDEN_SIZE, 1, 196, bidirectional)
 #    model = attn_model.Encoder(10, 20, bidirectional)
     
@@ -570,17 +422,14 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
     # Training the model
     start = time.time()
     
-#    (encoder, decoder) = train_model(encoder, decoder, data_loaders, criterion, 
-#                           encoder_optimizer, decoder_optimizer, lr_scheduler, 
-#                           labs_keys, labs_values, num_epochs=N_EPOCHS)
-#    encoder, decoder = train_model(encoder, decoder, data_loaders, criterion, optimizer_ft,
-#                                    lr_scheduler, labs_keys, labs_values, seq=8,
-#                                    num_epochs=N_EPOCHS)
+    (encoder, decoder) = train_model(encoder, decoder, data_loaders, criterion, 
+                           encoder_optimizer, decoder_optimizer, lr_scheduler, 
+                           labs_keys, labs_values, num_epochs=N_EPOCHS)
         
     end = time.time()
     
     # save the best performing model
-#    attn_utils.save_attn_model_checkpoint(base_name, (encoder, decoder), N_EPOCHS, "SGD")
+    attn_utils.save_attn_model_checkpoint(base_name, (encoder, decoder), N_EPOCHS, "SGD")
     # Load model checkpoints
     encoder, decoder = attn_utils.load_attn_model_checkpoint(base_name, encoder, decoder, N_EPOCHS, "SGD")
     
@@ -591,8 +440,191 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
 #    features_val, stroke_names_id_val = attn_utils.read_feats(os.path.join(base_name, ft_dir), 
 #                                                              feat_val, snames_val)
     print("Writing prediction dictionary....")
-    pred_out_dict = predict(encoder, decoder, data_loaders, criterion, labs_keys, 
+    pred_out_dict, acc = predict(encoder, decoder, data_loaders, criterion, labs_keys, 
                             labs_values, phase='test')
+    
+    with open(os.path.join(base_name, "pred_dict.pkl"), "wb") as fp:
+        pickle.dump(pred_out_dict, fp)
+    
+    # save the output wts and related information
+    print("#Parameters Encoder : {} ".format(autoenc_utils.count_parameters(encoder)))
+    print("#Parameters Decoder : {} ".format(autoenc_utils.count_parameters(decoder)))
+    
+    return encoder, decoder
+
+if __name__ == '__main__':
+    # Local Paths
+    LABELS = "/home/arpan/VisionWorkspace/Cricket/scripts/supporting_files/sample_set_labels/sample_labels_shots/ICC WT20"
+    DATASET = "/home/arpan/VisionWorkspace/VideoData/sample_cricket/ICC WT20"
+    CLASS_IDS = "/home/arpan/VisionWorkspace/Cricket/cluster_strokes/configs/Class Index_Strokes.txt"
+    ANNOTATION_FILE = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/shots_classes.txt"
+
+    SEQ_SIZE = 8
+    STEP = 4
+    BATCH_SIZE = 256
+    N_EPOCHS = 30
+    
+    extract_path = os.path.join(base_path, "conv_attn_wtsout1_seq"+str(SEQ_SIZE))
+    encoder, decoder =  main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, 
+                             SEQ_SIZE, STEP, nstrokes=-1, N_EPOCHS=N_EPOCHS, 
+                             base_name=extract_path)
+
+
+
+#    ###########################################################################
+#def extract_attn_feats(encoder, decoder, DATASET, LABELS, CLASS_IDS, BATCH_SIZE, 
+#                       SEQ_SIZE=16, STEP=16, partition='train', nstrokes=-1, base_name=""):
+#    '''
+#    Extract sequence features from AutoEncoder.
+#    
+#    Parameters:
+#    -----------
+#    encoder, decoder : attn_model.Encoder 
+#        relative path to the checkpoint file for Autoencoder
+#    DATASET : str
+#        path to the video dataset
+#    LABELS : str
+#        path containing stroke labels
+#    BATCH_SIZE : int
+#        size for batch of clips
+#    SEQ_SIZE : int
+#        no. of frames in a clip
+#    STEP : int
+#        stride for next example. If SEQ_SIZE=16, STEP=8, use frames (0, 15), (8, 23) ...
+#    partition : str
+#        'train' / 'test' / 'val' : Videos to be considered
+#    nstrokes : int
+#        partial extraction of features (do not execute for entire dataset)
+#    base_name : str
+#        path containing the pickled feature dumps
+#    
+#    Returns:
+#    --------
+#    features_dictionary, stroke_names
+#    
+#    '''
+#    
+#    ###########################################################################
+#    # Read the strokes 
+#    # Divide the highlight dataset files into training, validation and test sets
+#    train_lst, val_lst, test_lst = autoenc_utils.split_dataset_files(DATASET)
+#    print("No. of training videos : {}".format(len(train_lst)))
+#    
+#    #####################################################################
+#    
+#    if partition == 'train':
+#        partition_lst = train_lst
+#    elif partition == 'val':
+#        partition_lst = val_lst
+#    elif partition == 'test':
+#        partition_lst = test_lst
+#    else:
+#        print("Partition should be : train / val / test")
+#        return
+#        
+#    ###########################################################################
+#    # Create a Dataset
+#    # Clip level transform. Use this with framewiseTransform flag turned off
+#    clip_transform = transforms.Compose([videotransforms.CenterCrop(224),
+#                                         videotransforms.ToPILClip(), 
+#                                         videotransforms.Resize((112, 112)),
+##                                         videotransforms.RandomCrop(112), 
+#                                         videotransforms.ToTensor(), 
+##                                         videotransforms.Normalize(),
+#                                        #videotransforms.RandomHorizontalFlip(),\
+#                                        ])    
+#    part_dataset = CricketStrokesDataset(partition_lst, DATASET, LABELS, CLASS_IDS, 
+#                                         frames_per_clip=SEQ_SIZE, step_between_clips=STEP, 
+#                                         train=False, framewiseTransform=False, 
+#                                         transform=clip_transform)
+#    
+#    data_loader = DataLoader(dataset=part_dataset, batch_size=BATCH_SIZE, shuffle=False)
+#
+#    ###########################################################################
+#    # Validate / Evaluate
+#    encoder.eval()
+#    decoder.eval()
+#    stroke_names = []
+#    trajectories, stroke_traj = [], []
+#    num_strokes = 0
+#    prev_stroke = None
+#    print("Total Batches : {} :: BATCH_SIZE : {}".format(data_loader.__len__(), BATCH_SIZE))
+#    ###########################################################################
+#    for bno, (inputs, vid_path, stroke, labels) in enumerate(data_loader):
+#        # inputs of shape BATCH x SEQ_LEN x FEATURE_DIM
+#        inputs = inputs.permute(0, 2, 1, 3, 4).float()
+#        inputs = inputs.to(device)
+#        targets = inputs
+##        print("Batch No : {} / {}".format(bno, len(data_loader)))
+#        # forward
+#        # track history if only in train
+#        with torch.set_grad_enabled(False):
+#            
+#            batch_size = inputs.size(0)
+#            enc_h = encoder._init_hidden(batch_size)
+#            enc_out, enc_h = encoder(inputs, enc_h)
+##            dec_out = decoder(enc_out)
+##            loss += criterion(dec_out, targets)
+#            
+#            dec_out_lst = []
+##            target_length = inputs.size(1)      # assign SEQ_LEN as target length for now
+#            # run for each word of the sequence (use teacher forcing)
+##            for ti in range(target_length):
+##                dec_out, dec_h, dec_attn = decoder(dec_h, enc_out, dec_in)
+#            dec_out_lst.append(enc_out)
+##                dec_in = dec_out
+#    
+#            outputs = torch.stack(dec_out_lst, dim=1)
+#            
+#        # convert to start frames and end frames from tensors to lists
+#        stroke = [s.tolist() for s in stroke]
+#        # outputs are the reconstructed features. Use compressed enc_out values(maybe wtd.).
+#        inputs_lst, batch_stroke_names = autoenc_utils.separate_stroke_tensors(enc_out, \
+#                                                                    vid_path, stroke)
+#        
+#        # for sequence of features from batch segregated extracted features.
+#        if bno == 0:
+#            prev_stroke = batch_stroke_names[0]
+#        
+#        for enc_idx, enc_input in enumerate(inputs_lst):
+#            # get no of sequences that can be extracted from enc_input tensor
+#            nSeqs = enc_input.size(0)
+#            if prev_stroke != batch_stroke_names[enc_idx]:
+#                # append old stroke to trajectories
+#                if len(stroke_traj) > 0:
+#                    num_strokes += 1
+#                    trajectories.append(stroke_traj)
+#                    stroke_names.append(prev_stroke)
+#                    stroke_traj = []
+#            
+##            enc_output = model.encoder(enc_input.to(device))
+##            enc_output = enc_output.squeeze(axis=1).cpu().data.numpy()
+#            enc_output = enc_input.cpu().data.numpy()
+#            
+#            # convert to [[[stroke1(size 32 each) ... ], [], ...], [ [], ... ]]
+#            stroke_traj.extend([enc_output[i,j,:] for i in range(enc_output.shape[0]) \
+#                                                for j in range(enc_output.shape[1])])
+#            prev_stroke = batch_stroke_names[enc_idx]
+#            
+#        if nstrokes > -1 and num_strokes >= nstrokes:
+#            break
+#       
+#    # for last batch only if extracted for full dataset
+#    if len(stroke_traj) > 0 and nstrokes < 0:
+#        trajectories.append(stroke_traj)
+#        stroke_names.append(batch_stroke_names[-1])
+#    
+#    # convert to dictionary of features with keys as stroke names(with ext). 
+#    features = {}
+#    for i, t in enumerate(trajectories):
+#        features[stroke_names[i]] = np.array(t)
+#    
+##    trajectories, stroke_names = autoenc_utils.group_strokewise(trajectories, stroke_names)
+#    
+#    return features, stroke_names
+
+
+
 #    if not os.path.isfile(os.path.join(base_name, "conv_encdec_train.pkl")):
 #        if not os.path.exists(base_name):
 #            os.makedirs(base_name)
@@ -626,32 +658,3 @@ def main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, SEQ_SIZE=16,
 #            pickle.dump(feats_dict, fp)
 #        with open(os.path.join(base_name, "conv_encdec_snames_test.pkl"), "wb") as fp:
 #            pickle.dump(stroke_names, fp)
-    
-    with open(os.path.join(base_name, "pred_dict.pkl"), "wb") as fp:
-        pickle.dump(pred_out_dict, fp)
-    
-    # save the output wts and related information
-    
-    print("#Parameters Encoder : {} ".format(autoenc_utils.count_parameters(encoder)))
-    print("#Parameters Decoder : {} ".format(autoenc_utils.count_parameters(decoder)))
-    
-    
-    return encoder, decoder
-
-if __name__ == '__main__':
-    # Local Paths
-    LABELS = "/home/arpan/VisionWorkspace/Cricket/scripts/supporting_files/sample_set_labels/sample_labels_shots/ICC WT20"
-    DATASET = "/home/arpan/VisionWorkspace/VideoData/sample_cricket/ICC WT20"
-    CLASS_IDS = "/home/arpan/VisionWorkspace/Cricket/cluster_strokes/configs/Class Index_Strokes.txt"
-    ANNOTATION_FILE = "/home/arpan/VisionWorkspace/Cricket/CricketStrokeLocalizationBOVW/shots_classes.txt"
-
-    SEQ_SIZE = 8
-    STEP = 4
-    BATCH_SIZE = 8
-    N_EPOCHS = 30
-    
-    extract_path = os.path.join(base_path, "conv_encdec_framesNew_seq"+str(SEQ_SIZE))
-    encoder, decoder =  main(DATASET, LABELS, CLASS_IDS, BATCH_SIZE, ANNOTATION_FILE, 
-                             SEQ_SIZE, STEP, nstrokes=-1, N_EPOCHS=N_EPOCHS, 
-                             base_name=extract_path)
-

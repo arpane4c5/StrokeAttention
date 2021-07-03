@@ -307,10 +307,9 @@ class Conv3DEncoder(nn.Module):
         h = h.squeeze(2).permute(0, 2, 3, 1)
         #h = h.permute(0, 2, 1, 3, 4)
         h = h.view(batch, -1, h.size(-1)) # No of sequences 14*14
-#        hid_vec = self._init_hidden(batch)
-#        output, hid_vec = self.gru(h, hid_vec)        
-#        return output, hid_vec
-        return h
+        output, hid_vec = self.gru(h, hid_vec)
+        return output, hid_vec
+#        return h
     
     def _init_hidden(self, batch_size):
          #* self.n_directions
@@ -363,7 +362,7 @@ class AttentionDecoder(nn.Module):
         self.dropout_p = dropout_p
         self.max_length = max_length
 
-        self.attn = nn.Linear(self.hidden_size + self.output_size, 1) #self.max_length)
+        self.attn = nn.Linear(self.hidden_size + self.output_size, self.max_length)
         self.attn_combine = nn.Linear(self.hidden_size + self.output_size, self.hidden_size)
         self.dropout = nn.Dropout(self.dropout_p)
         self.gru = nn.GRU(self.hidden_size + self.hidden_size, self.hidden_size, batch_first=True)
@@ -384,14 +383,15 @@ class AttentionDecoder(nn.Module):
             
             weights.append(self.attn(torch.cat((decoder_hidden[0], 
                                                 encoder_outputs[:,i]), dim = 1)))
-        normalized_weights = F.softmax(torch.cat(weights, 1), 1)
+        normalized_weights = F.softmax(torch.stack(weights, -1), -1)
+
 #        # find attention weights (BATCH, SEQ_SIZE)  ---- old code
 #        attn_weights = F.softmax(self.attn(torch.cat((input, decoder_hidden[0]), 1)), dim=1)
         # if BATCH > 1 or BATCH==1, then unsqueeze(1) for attn_weights
 #        attn_applied = torch.bmm(normalized_weights.unsqueeze(1),
 #                             encoder_outputs.view(1, -1, self.hidden_size))
-        attn_applied = torch.bmm(normalized_weights.unsqueeze(1), encoder_outputs)
-        input_gru = torch.cat((attn_applied.squeeze(1), input), dim = 1)  
+        attn_applied = torch.bmm(normalized_weights, encoder_outputs)
+        input_gru = torch.cat((attn_applied, input.unsqueeze(1)), -1)  
 
 #        # Either loop over the batch samples of encoder_outputs or broadcast attn_weights
 #        attn_applied = []
@@ -403,7 +403,7 @@ class AttentionDecoder(nn.Module):
 #        output = self.attn_combine(output) #.unsqueeze(0)   (BATCH, HIDDEN_SIZE)
 
 #        output = F.relu(output)
-        output, decoder_hidden = self.gru(input_gru.unsqueeze(1), decoder_hidden)
+        output, decoder_hidden = self.gru(input_gru, decoder_hidden)
 
         output = self.out(output.squeeze(1)) # F.log_softmax(self.out(output.squeeze(1)), dim=1)
         return output, decoder_hidden, normalized_weights
